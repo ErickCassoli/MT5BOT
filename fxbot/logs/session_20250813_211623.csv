@@ -1,0 +1,4 @@
+ts,event,symbol,side,volume,price,sl,tp,retcode,comment,atr,dist_up,dist_low,near_thr,adx_h1,confidence,ticket,extra
+2025-08-13T21:16:23.046699,session_start,,,,,,,,,,,,,,,,baseline=2902.73
+2025-08-13T21:37:41.390620,signal,EURUSD,BUY,,,,,,,0.00046399999999997555,0.00019999999999997797,0.0008299999999998864,0.00016239999999999142,30.258630770588926,0.6500000000000001,,
+2025-08-13T21:37:41.599343,order,EURUSD,BUY,0.23,1.17052,1.16978,1.172,10009,Request executed,,,,,,,4339621731,

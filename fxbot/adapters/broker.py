@@ -1,0 +1,36 @@
+from abc import ABC, abstractmethod
+from typing import List, Optional
+import pandas as pd
+from fxbot.core.types import OrderRequest, PositionView
+
+
+class Broker(ABC):
+    @abstractmethod
+    def initialize(self): ...
+
+    @abstractmethod
+    def get_rates(self, symbol: str, timeframe: str,
+                  count: int) -> pd.DataFrame: ...
+
+    @abstractmethod
+    def get_spread_points(self, symbol: str) -> int: ...
+    @abstractmethod
+    def get_point(self, symbol: str) -> float: ...
+    @abstractmethod
+    def get_digits(self, symbol: str) -> int: ...
+    @abstractmethod
+    def place_order(self, req: OrderRequest): ...
+
+    @abstractmethod
+    def positions(self, symbol: Optional[str]
+                  = None) -> List[PositionView]: ...
+
+    @abstractmethod
+    def modify_sltp(self, ticket: int, sl: float, tp: float): ...
+    @abstractmethod
+    def close_position(self, ticket: int, volume: float): ...
+    @abstractmethod
+    def account_equity(self) -> float: ...
+    # histórico p/ resumo
+    @abstractmethod
+    def history_deals_df(self, start_dt, end_dt) -> pd.DataFrame: ...

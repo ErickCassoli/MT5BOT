@@ -1,0 +1,67 @@
+# ===================== FXBOT CONFIG — 24/7 (VKBP) =====================
+
+symbols: ["USDJPY", "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "EURJPY"]
+
+timeframe_exec: "M5"
+timeframe_regime: "H1"
+cooldown_minutes: 4
+magic: 5120812
+deviation_points: 30           # slippage um pouco maior p/ horário noturno
+log_every_bar: true           # ligue true só em debug
+
+strategy:
+  class_path: "fxbot.strategies.vwap_keltner.VWAPKeltner"
+  params:
+    # Keltner
+    k_ema_len: 20
+    k_atr_len: 10
+    k_mult: 1.8                # 2.0 = mais conservador; 1.8 dá +sinais
+    # Regime H1
+    adx_thr: 14                # 12 agressivo | 14 balanceado p/ 24h
+    # Pullback c/ VWAP
+    rsi_len: 14
+    rsi_trig: 50
+    near_vwap_by_atr: 0.35     # proximidade em ATR(M5) p/ validar pullback
+    # Confirmações
+    confirm_ema20: true
+    allow_break_close: true
+    min_bars: 150
+    # opcional (só p/ logs/diagnóstico no executor)
+    donchian: 16
+
+broker:
+  class_path: "fxbot.adapters.mt5.MT5Broker"
+  params: {}
+
+session:
+  hours: 24
+  start_hour: 0
+  end_hour: 24
+  profit_target_pct: 3.0
+  loss_limit_pct: 4.0
+  continue_after_target: true
+  max_concurrent_trades: 4
+
+  # pyramiding (compatível com o Executor atualizado)
+  allow_pyramiding: true
+  max_stack_per_symbol: 2
+  min_stack_increase_r: 0.5
+  pyramiding_risk_scale: 0.5
+
+risk:
+  risk_per_trade_pct: 0.6              # 24h: mais seguro que 0.8–1.0
+  risk_per_trade_pct_after_target: 0.25
+  atr_mult_sl: 1.6
+  atr_mult_tp: 3.2                      # ~2R
+  atr_trail_mult: 1.05                  # trava ganho cedo em mercados lentos
+  partial_at_1r: 0.5
+
+spread:
+  hard_cap_points: 35                   # EURJPY/GBPs à noite precisam disso
+  max_atr_ratio: 0.90                   # 24h: aceita spread até 0.9×ATR(M5)
+
+ml_model:
+  class_path: "fxbot.ml.xgb_model.XGBModel"
+  params:
+    path: "models/xgb_vkbp.pkl"         # deixe SEM min_prob p/ usar o thr salvo
+    # min_prob: 0.40                    # (opcional) use só se quiser mais sinais
