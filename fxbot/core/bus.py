@@ -1,4 +1,4 @@
-# fxbot/fxbot.core/bus.py  (opcional; não usado agora, mas deixo pronto)
+# fxbot/core/bus.py  (opcional; não usado agora, mas deixo pronto)
 from collections import defaultdict
 from typing import Callable, Dict, List, Any
 

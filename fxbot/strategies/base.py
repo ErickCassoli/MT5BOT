@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Dict
 import pandas as pd
-from fxbot.core.types import Signal
+from core.types import Signal
 
 
 class Strategy(ABC):

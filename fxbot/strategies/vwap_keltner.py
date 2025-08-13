@@ -5,17 +5,21 @@ from typing import Optional, Dict, Any
 import numpy as np
 import pandas as pd
 
-from fxbot.core.types import Signal, Side
-from fxbot.core.utils import ema, atr, adx
+from core.types import Signal, Side
+from core.utils import ema, atr, adx
 
 # VWAP ancorado no dia (usa tick volume como proxy)
+
+
 def vwap_session(df: pd.DataFrame) -> pd.Series:
     tp = (df["h"] + df["l"] + df["c"]) / 3.0
     vol = df["v"] if "v" in df.columns else pd.Series(1.0, index=df.index)
-    day = pd.to_datetime(df["time"]).dt.date if "time" in df.columns else pd.Series(0, index=df.index)
+    day = pd.to_datetime(
+        df["time"]).dt.date if "time" in df.columns else pd.Series(0, index=df.index)
     pv = (tp * vol).groupby(day).cumsum()
     vv = vol.groupby(day).cumsum().replace(0, np.nan)
     return pv / vv
+
 
 def keltner(df: pd.DataFrame, ema_len: int, atr_len: int, mult: float):
     mid = ema(df["c"], ema_len)
@@ -23,6 +27,7 @@ def keltner(df: pd.DataFrame, ema_len: int, atr_len: int, mult: float):
     up = mid + mult * a
     lo = mid - mult * a
     return mid, up, lo, a
+
 
 class VWAPKeltner:
     """
@@ -45,11 +50,13 @@ class VWAPKeltner:
         self.rsi_trig: float = float(params.get("rsi_trig", 50))
 
         # quão “perto” da VWAP (em ATR M5) p/ validar pullback
-        self.near_vwap_by_atr: float = float(params.get("near_vwap_by_atr", 0.35))
+        self.near_vwap_by_atr: float = float(
+            params.get("near_vwap_by_atr", 0.35))
 
         # confirmações auxiliares
         self.confirm_ema20: bool = bool(params.get("confirm_ema20", True))
-        self.allow_break_close: bool = bool(params.get("allow_break_close", True))
+        self.allow_break_close: bool = bool(
+            params.get("allow_break_close", True))
         self.min_bars: int = int(params.get("min_bars", 150))
 
         # opcional: janela donchian usada em logs/diagnóstico (não é o motor da VKBP)
@@ -74,13 +81,16 @@ class VWAPKeltner:
         ema50_h1 = ema(df_r["c"], 50)
         ema200_h1 = ema(df_r["c"], 200)
         adx_h1 = adx(df_r["h"], df_r["l"], df_r["c"], 14)
-        uptrend = (df_r["c"].iloc[-1] > ema200_h1.iloc[-1]) and (ema50_h1.iloc[-1] > ema200_h1.iloc[-1]) and (adx_h1.iloc[-1] >= self.adx_thr)
-        downtrend = (df_r["c"].iloc[-1] < ema200_h1.iloc[-1]) and (ema50_h1.iloc[-1] < ema200_h1.iloc[-1]) and (adx_h1.iloc[-1] >= self.adx_thr)
+        uptrend = (df_r["c"].iloc[-1] > ema200_h1.iloc[-1]) and (ema50_h1.iloc[-1]
+                                                                 > ema200_h1.iloc[-1]) and (adx_h1.iloc[-1] >= self.adx_thr)
+        downtrend = (df_r["c"].iloc[-1] < ema200_h1.iloc[-1]) and (ema50_h1.iloc[-1]
+                                                                   < ema200_h1.iloc[-1]) and (adx_h1.iloc[-1] >= self.adx_thr)
         if not (uptrend or downtrend):
             return None
 
         # ===== Exec (M5) =====
-        mid, kup, klo, a = keltner(df_e, self.k_ema_len, self.k_atr_len, self.k_mult)
+        mid, kup, klo, a = keltner(
+            df_e, self.k_ema_len, self.k_atr_len, self.k_mult)
         a0 = float(a.iloc[-1])
         if not np.isfinite(a0) or a0 <= 0:
             return None
@@ -90,20 +100,26 @@ class VWAPKeltner:
         ema20_m5 = ema(df_e["c"], 20)
 
         c0 = float(df_e["c"].iloc[-1])
-        up0 = float(kup.iloc[-1]); lo0 = float(klo.iloc[-1])
+        up0 = float(kup.iloc[-1])
+        lo0 = float(klo.iloc[-1])
         vwap0 = float(vwap.iloc[-1])
         rsi0 = float(rsi_ser.iloc[-1])
-        ema20_ok = (c0 > float(ema20_m5.iloc[-1])) if uptrend else (c0 < float(ema20_m5.iloc[-1]))
+        ema20_ok = (c0 > float(
+            ema20_m5.iloc[-1])) if uptrend else (c0 < float(ema20_m5.iloc[-1]))
 
         near_thr = self.near_vwap_by_atr * a0
         near_vwap = abs(c0 - vwap0) <= near_thr
 
         # Gatilhos VKBP
-        long_break  = uptrend  and (c0 > up0) and (self.allow_break_close) and ema20_ok and (c0 > vwap0)
-        short_break = downtrend and (c0 < lo0) and (self.allow_break_close) and ema20_ok and (c0 < vwap0)
+        long_break = uptrend and (c0 > up0) and (
+            self.allow_break_close) and ema20_ok and (c0 > vwap0)
+        short_break = downtrend and (c0 < lo0) and (
+            self.allow_break_close) and ema20_ok and (c0 < vwap0)
 
-        long_pull  = uptrend  and near_vwap and (rsi0 >= self.rsi_trig) and (c0 > vwap0) and ema20_ok
-        short_pull = downtrend and near_vwap and (rsi0 <= (100 - self.rsi_trig)) and (c0 < vwap0) and ema20_ok
+        long_pull = uptrend and near_vwap and (
+            rsi0 >= self.rsi_trig) and (c0 > vwap0) and ema20_ok
+        short_pull = downtrend and near_vwap and (
+            rsi0 <= (100 - self.rsi_trig)) and (c0 < vwap0) and ema20_ok
 
         side: Optional[Side] = None
         trigger = None
@@ -135,7 +151,7 @@ class VWAPKeltner:
 
         # Distâncias tipo Donchian (só p/ debug; não é requisito da VKBP)
         try:
-            from fxbot.core.utils import donchian
+            from core.utils import donchian
             up_d, lo_d = donchian(df_e["h"], df_e["l"], self.donchian_win)
             meta["dist_up"] = float(max(0.0, up_d.iloc[-1] - c0))
             meta["dist_low"] = float(max(0.0, c0 - lo_d.iloc[-1]))

@@ -7,30 +7,58 @@ timeframe_regime: "H1"
 cooldown_minutes: 4
 magic: 5120812
 deviation_points: 30           # slippage um pouco maior p/ horário noturno
-log_every_bar: true           # ligue true só em debug
+log_every_bar: false           # ligue true só em debug
 
 strategy:
-  class_path: "fxbot.strategies.vwap_keltner.VWAPKeltner"
+  class_path: "strategies.ensemble_router.EnsembleRouter"
   params:
-    # Keltner
-    k_ema_len: 20
-    k_atr_len: 10
-    k_mult: 1.8                # 2.0 = mais conservador; 1.8 dá +sinais
-    # Regime H1
-    adx_thr: 14                # 12 agressivo | 14 balanceado p/ 24h
-    # Pullback c/ VWAP
-    rsi_len: 14
-    rsi_trig: 50
-    near_vwap_by_atr: 0.35     # proximidade em ATR(M5) p/ validar pullback
-    # Confirmações
-    confirm_ema20: true
-    allow_break_close: true
-    min_bars: 150
-    # opcional (só p/ logs/diagnóstico no executor)
-    donchian: 16
+    mode: "best_conf"   # ou "first"
+    children:
+      - class_path: "strategies.vwap_keltner.VWAPKeltner"
+        params:
+          k_ema_len: 20
+          k_atr_len: 10
+          k_mult: 1.8
+          adx_thr: 14
+          rsi_len: 14
+          rsi_trig: 50
+          near_vwap_by_atr: 0.35
+          confirm_ema20: true
+          allow_break_close: true
+          min_bars: 150
+          donchian: 16
+
+      - class_path: "strategies.donchian_adx.DonchianADX"
+        params:
+          donchian: 16
+          adx_thr: 18
+          ema_fast: 50
+          ema_slow: 200
+          allow_close_break: true
+          min_bars: 150
+          boost_strong_adx: 5
+
+      - class_path: "strategies.breakout_volume.BreakoutVolume"
+        params:
+          sr_win: 24
+          vol_lookback: 20
+          vol_mult: 1.6
+          adx_thr: 12
+          allow_retest: true
+          min_bars: 200
+
+      - class_path: "strategies.scalper_rsi_bb.ScalperRSIBB"
+        params:
+          rsi_len: 14
+          rsi_buy: 30
+          rsi_sell: 70
+          bb_len: 20
+          bb_k: 2.0
+          max_adx_h1: 18
+          min_bars: 120
 
 broker:
-  class_path: "fxbot.adapters.mt5.MT5Broker"
+  class_path: "adapters.mt5.MT5Broker"
   params: {}
 
 session:
@@ -41,9 +69,7 @@ session:
   loss_limit_pct: 4.0
   continue_after_target: true
   max_concurrent_trades: 4
-
-  # pyramiding (compatível com o Executor atualizado)
-  allow_pyramiding: true
+  allow_pyramiding: false
   max_stack_per_symbol: 2
   min_stack_increase_r: 0.5
   pyramiding_risk_scale: 0.5
@@ -57,11 +83,11 @@ risk:
   partial_at_1r: 0.5
 
 spread:
-  hard_cap_points: 35                   # EURJPY/GBPs à noite precisam disso
-  max_atr_ratio: 0.90                   # 24h: aceita spread até 0.9×ATR(M5)
+  hard_cap_points: 40                # EURJPY/GBPs à noite precisam disso
+  max_atr_ratio: 0.80                   # 24h: aceita spread até 0.9×ATR(M5)
 
 ml_model:
-  class_path: "fxbot.ml.xgb_model.XGBModel"
+  class_path: "ml.xgb_model.XGBModel"
   params:
     path: "models/xgb_vkbp.pkl"         # deixe SEM min_prob p/ usar o thr salvo
     # min_prob: 0.40                    # (opcional) use só se quiser mais sinais

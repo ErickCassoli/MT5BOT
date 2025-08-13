@@ -5,8 +5,8 @@ import pandas as pd
 import MetaTrader5 as mt5
 
 # nossas features e utils (rodando como módulo do pacote fxbot)
-from fxbot.ml.features import compute_features
-from fxbot.core.utils import atr, ema, adx
+from ml.features import compute_features
+from core.utils import atr, ema, adx
 
 _TF = {
     "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,

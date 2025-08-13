@@ -1,6 +1,6 @@
 from typing import Optional
-from fxbot.core.types import OrderRequest, Side
-from fxbot.adapters.broker import Broker
+from core.types import OrderRequest, Side
+from adapters.broker import Broker
 
 
 class RiskManager:

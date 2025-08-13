@@ -1,7 +1,7 @@
 from __future__ import annotations
 import pandas as pd
 import numpy as np
-from fxbot.core.utils import ema, atr, adx, donchian
+from core.utils import ema, atr, adx, donchian
 
 
 def compute_features(df_exec: pd.DataFrame,

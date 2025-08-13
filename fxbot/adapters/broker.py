@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 import pandas as pd
-from fxbot.core.types import OrderRequest, PositionView
+from core.types import OrderRequest, PositionView
 
 
 class Broker(ABC):

@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 import yaml
 
+
 class SessionConfig(BaseModel):
     hours: int = 8
     start_hour: int = 8
@@ -13,7 +14,8 @@ class SessionConfig(BaseModel):
     allow_pyramiding: bool = False
     max_stack_per_symbol: int = 1      # 1 = não empilha (estado atual)
     min_stack_increase_r: float = 0.5  # só empilha se lucro >= 0.5R
-    pyramiding_risk_scale: float = 0.5 # risco da nova entrada = 50% do base
+    pyramiding_risk_scale: float = 0.5  # risco da nova entrada = 50% do base
+
 
 class RiskConfig(BaseModel):
     risk_per_trade_pct: float = 0.6
@@ -23,20 +25,24 @@ class RiskConfig(BaseModel):
     partial_at_1r: float = 0.5
     risk_per_trade_pct_after_target: Optional[float] = None
 
+
 class SpreadConfig(BaseModel):
     hard_cap_points: int = 25
     max_atr_ratio: float = 0.28
 
+
 class StrategyConfig(BaseModel):
-    class_path: str = "fxbot.strategies.donchian_breakout.DonchianBreakout"
+    class_path: str = "strategies.donchian_breakout.DonchianBreakout"
     params: Dict = {}
+
 
 class BrokerConfig(BaseModel):
-    class_path: str = "fxbot.adapters.mt5.MT5Broker"
+    class_path: str = "adapters.mt5.MT5Broker"
     params: Dict = {}
 
+
 class AppConfig(BaseModel):
-    symbols: List[str] = ["EURUSD","GBPUSD","USDJPY","USDCHF"]
+    symbols: List[str] = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF"]
     timeframe_exec: str = "M5"
     timeframe_regime: str = "H1"
     cooldown_minutes: int = 8
@@ -49,6 +55,7 @@ class AppConfig(BaseModel):
     risk: RiskConfig = RiskConfig()
     spread: SpreadConfig = SpreadConfig()
     ml_model: Optional[Dict] = None
+
 
 def load_config(path="config.yaml") -> AppConfig:
     with open(path, "r", encoding="utf-8") as f:

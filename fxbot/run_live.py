@@ -1,10 +1,10 @@
 # fxbot/run_live.py (apenas as linhas do main mudam)
 from pathlib import Path
-from fxbot.core.config import load_config
-from fxbot.core.utils import import_from_path
-from fxbot.adapters.broker import Broker
-from fxbot.exec.execution import Executor
-from fxbot.logs.csv_logger import CSVLogger
+from core.config import load_config
+from core.utils import import_from_path
+from adapters.broker import Broker
+from exec.execution import Executor
+from logs.csv_logger import CSVLogger
 from datetime import datetime, timezone
 
 PKG_DIR = Path(__file__).resolve().parent

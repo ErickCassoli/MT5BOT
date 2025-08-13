@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta, timezone
-from fxbot.core.types import Side
-from fxbot.core.utils import atr, donchian, adx, ema
-from fxbot.adapters.broker import Broker
-from fxbot.logs.csv_logger import CSVLogger
-from fxbot.logs.json_summary import JSONSummary
+from core.types import Side
+from core.utils import atr, donchian, adx, ema
+from adapters.broker import Broker
+from logs.csv_logger import CSVLogger
+from logs.json_summary import JSONSummary
 
 
 class Executor:
@@ -27,7 +27,8 @@ class Executor:
         self.session_end = now_utc + timedelta(hours=self.cfg.session.hours)
         self.baseline = baseline_equity
         if self.verbose:
-            print(f"[SESSION] start={self.session_start} end={self.session_end} baseline={self.baseline}")
+            print(
+                f"[SESSION] start={self.session_start} end={self.session_end} baseline={self.baseline}")
         self.logger.start(self.session_start, self.baseline)
         self.json_summary.start(self.session_start)
 
@@ -88,12 +89,14 @@ class Executor:
                 # use o near_* do seu strategy (VKBP) como medida de proximidade
                 win = self.cfg.strategy.params.get("donchian", 14)
                 c0 = float(df_e['c'].iloc[-1])
-                adx_h1 = float(adx(df_r['h'], df_r['l'], df_r['c'], 14).iloc[-1])
-                strong_trend = adx_h1 >= max(14.0, self.cfg.strategy.params.get("adx_thr", 14) + 2.0)
+                adx_h1 = float(
+                    adx(df_r['h'], df_r['l'], df_r['c'], 14).iloc[-1])
+                strong_trend = adx_h1 >= max(
+                    14.0, self.cfg.strategy.params.get("adx_thr", 14) + 2.0)
 
                 # proximidade (fallbacks: Donchian ou near_* do strategy)
                 near_ratio = self.cfg.strategy.params.get("near_by_atr_ratio",
-                              self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
+                                                          self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
                 near_thr = float(near_ratio * atr_now)
 
                 dist_ok = False
@@ -101,11 +104,13 @@ class Executor:
                     up, lo = donchian(df_e['h'], df_e['l'], win)
                     dist_up = max(0.0, float(up.iloc[-1] - c0))
                     dist_low = max(0.0, float(c0 - lo.iloc[-1]))
-                    dist_ok = (dist_up <= max(near_thr, 0.2*atr_now)) or (dist_low <= max(near_thr, 0.2*atr_now))
+                    dist_ok = (dist_up <= max(near_thr, 0.2*atr_now)
+                               ) or (dist_low <= max(near_thr, 0.2*atr_now))
                 except Exception:
                     dist_ok = False
 
-                grace_ok = strong_trend and dist_ok and (spread_price <= 0.95 * max(atr_now, 1e-9))
+                grace_ok = strong_trend and dist_ok and (
+                    spread_price <= 0.95 * max(atr_now, 1e-9))
             except Exception:
                 grace_ok = False
 
@@ -121,7 +126,8 @@ class Executor:
         last = self.last_signal_ts.get(symbol)
         if last and (datetime.utcnow() - last).total_seconds() < self.cfg.cooldown_minutes*60:
             if self.verbose:
-                left = self.cfg.cooldown_minutes*60 - (datetime.utcnow() - last).total_seconds()
+                left = self.cfg.cooldown_minutes*60 - \
+                    (datetime.utcnow() - last).total_seconds()
                 print(f"[{symbol}] skip: cooldown {left:.0f}s")
             return
 
@@ -140,11 +146,13 @@ class Executor:
                     win = self.cfg.strategy.params.get("donchian", 20)
                     up, lo = donchian(df_e['h'], df_e['l'], win)
                     c0 = df_e['c'].iloc[-1]
-                    print(f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}")
+                    print(
+                        f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}")
                 else:
                     near_ratio = self.cfg.strategy.params.get("near_by_atr_ratio",
-                                  self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
-                    print(f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
+                                                              self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
+                    print(
+                        f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
             return
 
         if sig.confidence < thr:
@@ -154,7 +162,8 @@ class Executor:
             return
 
         # ----- pyramiding / já tenho posição -----
-        open_mine = [p for p in self.broker.positions(symbol) if p.magic == self.cfg.magic]
+        open_mine = [p for p in self.broker.positions(
+            symbol) if p.magic == self.cfg.magic]
         risk_now = self.current_risk_pct()  # define cedo para poder ajustar no pyramiding
 
         if open_mine:
@@ -173,15 +182,20 @@ class Executor:
             from MetaTrader5 import symbol_info_tick
             t = symbol_info_tick(symbol)
             # robustez no lado
-            pos_is_buy = (getattr(pos, "side", None) == Side.BUY) or (getattr(pos, "side", None) and getattr(pos, "side").name == "BUY")
-            side_match = (pos_is_buy and sig.side == Side.BUY) or ((not pos_is_buy) and sig.side == Side.SELL)
+            pos_is_buy = (getattr(pos, "side", None) == Side.BUY) or (
+                getattr(pos, "side", None) and getattr(pos, "side").name == "BUY")
+            side_match = (pos_is_buy and sig.side == Side.BUY) or (
+                (not pos_is_buy) and sig.side == Side.SELL)
             price_now = t.bid if pos_is_buy else t.ask
-            profit = (price_now - pos.price_open) if pos_is_buy else (pos.price_open - price_now)
-            r_val = abs(pos.price_open - pos.sl) if getattr(pos, "sl", 0) > 0 else sig.atr * self.cfg.risk.atr_mult_sl
+            profit = (
+                price_now - pos.price_open) if pos_is_buy else (pos.price_open - price_now)
+            r_val = abs(pos.price_open - pos.sl) if getattr(pos,
+                                                            "sl", 0) > 0 else sig.atr * self.cfg.risk.atr_mult_sl
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
-                    print(f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | side_mismatch={not side_match})")
+                    print(
+                        f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | side_mismatch={not side_match})")
                 return
 
             # reduz risco da nova entrada
@@ -197,17 +211,19 @@ class Executor:
         )
 
         # envia ordem
-        from fxbot.risk.risk_manager import RiskManager
+        from risk.risk_manager import RiskManager
         rm = RiskManager(self.broker, self.cfg.risk)
         if self.verbose and self.cfg.session.continue_after_target and self.equity_gain_pct() >= self.cfg.session.profit_target_pct:
             print(f"[{symbol}] post-target mode: risk_per_trade={risk_now:.2f}%")
 
-        req = rm.build_order(symbol, sig.side, sig.atr, sig.confidence, self.cfg.magic, risk_pct=risk_now)
+        req = rm.build_order(symbol, sig.side, sig.atr,
+                             sig.confidence, self.cfg.magic, risk_pct=risk_now)
         r = self.broker.place_order(req)
         retcode = getattr(r, "retcode", None)
         comment = getattr(r, "comment", "")
         ticket = getattr(r, "order", None)
-        self.logger.log_order(symbol, sig.side.value, req.volume, req.price, req.sl, req.tp, retcode, comment, ticket)
+        self.logger.log_order(symbol, sig.side.value, req.volume,
+                              req.price, req.sl, req.tp, retcode, comment, ticket)
         if retcode:
             print(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.utcnow()
@@ -221,13 +237,15 @@ class Executor:
                 continue
             df = self.broker.get_rates(p.symbol, self.cfg.timeframe_exec, 200)
             a = float(atr(df['h'], df['l'], df['c'], 14).iloc[-1])
-            r_val = abs(p.price_open - p.sl) if getattr(p, "sl", 0) > 0 else self.cfg.risk.atr_mult_sl * a
+            r_val = abs(p.price_open - p.sl) if getattr(p, "sl",
+                                                        0) > 0 else self.cfg.risk.atr_mult_sl * a
 
             from MetaTrader5 import symbol_info_tick
             t = symbol_info_tick(p.symbol)
             is_buy = (p.side == Side.BUY)
             price_now = t.bid if is_buy else t.ask
-            profit = (price_now - p.price_open) if is_buy else (p.price_open - price_now)
+            profit = (
+                price_now - p.price_open) if is_buy else (p.price_open - price_now)
 
             # parcial em 1R
             if profit >= r_val and p.volume > 0.01:
@@ -241,7 +259,8 @@ class Executor:
             if profit >= r_val:
                 be = p.price_open
                 trail = self.cfg.risk.atr_trail_mult * a
-                new_sl = max(be, price_now - trail) if is_buy else min(be, price_now + trail)
+                new_sl = max(be, price_now -
+                             trail) if is_buy else min(be, price_now + trail)
                 if abs((new_sl or 0) - (p.sl or 0)) > self.broker.get_point(p.symbol) * 2:
                     self.broker.modify_sltp(p.ticket, new_sl, p.tp)
                     self.logger.log_sltp(p.symbol, p.ticket, new_sl, p.tp)
@@ -253,15 +272,18 @@ class Executor:
             return
         try:
             df = self.broker.history_deals_df(self.session_start, now)
-            realized = float(df["profit"].sum()) if df is not None and not df.empty else 0.0
+            realized = float(df["profit"].sum()
+                             ) if df is not None and not df.empty else 0.0
             wins = losses = 0
             pf = None
             if df is not None and not df.empty:
                 agg = df.groupby("position_id")["profit"].sum()
                 wins = int((agg > 0).sum())
                 losses = int((agg < 0).sum())
-                pos_profit = float(agg[agg > 0].sum()) if (agg > 0).any() else 0.0
-                pos_loss = float(agg[agg < 0].sum()) if (agg < 0).any() else 0.0
+                pos_profit = float(agg[agg > 0].sum()) if (
+                    agg > 0).any() else 0.0
+                pos_loss = float(agg[agg < 0].sum()) if (
+                    agg < 0).any() else 0.0
                 pf = (pos_profit/abs(pos_loss)) if pos_loss < 0 else None
 
             eq_now = self.broker.account_equity()
@@ -271,7 +293,8 @@ class Executor:
             text = (
                 f"baseline={self.baseline:.2f} | equity_now={eq_now:.2f} | gain_pct={gain_pct:.2f}% | "
                 f"realized_pnl={realized:.2f} | closed_trades={closed} | wins={wins} | losses={losses} | "
-                f"winrate={(100*wins/closed):.1f}% " + (f"| PF={pf:.2f}" if pf is not None else "")
+                f"winrate={(100*wins/closed):.1f}% " +
+                (f"| PF={pf:.2f}" if pf is not None else "")
             ) if closed > 0 else (
                 f"baseline={self.baseline:.2f} | equity_now={eq_now:.2f} | gain_pct={gain_pct:.2f}% | realized_pnl={realized:.2f} | closed_trades=0"
             )

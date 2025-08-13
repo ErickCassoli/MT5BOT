@@ -1,11 +1,11 @@
 from typing import Optional
 import pandas as pd
-from fxbot.core.types import Signal, Side
-from fxbot.core.utils import donchian, ema, atr, adx
+from core.types import Signal, Side
+from core.utils import donchian, ema, atr, adx
 
 
 class DonchianBreakout(
-    __import__("fxbot.strategies.base", fromlist=["Strategy"]).Strategy
+    __import__("strategies.base", fromlist=["Strategy"]).Strategy
 ):
     def _regime(self, df_reg: pd.DataFrame, ema_fast: int, ema_slow: int, adx_thr: int):
         ema_f = ema(df_reg['c'], ema_fast)

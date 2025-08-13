@@ -1,8 +1,8 @@
 import MetaTrader5 as mt5
 import pandas as pd
 from typing import List, Optional
-from fxbot.core.types import OrderRequest, PositionView, Side
-from fxbot.adapters.broker import Broker
+from core.types import OrderRequest, PositionView, Side
+from adapters.broker import Broker
 
 _TF = {
     "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,

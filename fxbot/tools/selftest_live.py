@@ -6,16 +6,16 @@ import MetaTrader5 as mt5
 
 import pandas as pd
 
-from fxbot.core.config import load_config
-from fxbot.adapters.mt5 import MT5Broker
-from fxbot.core.utils import atr, donchian, ema
+from core.config import load_config
+from adapters.mt5 import MT5Broker
+from core.utils import atr, donchian, ema
 
 
 def import_from_path(path: str):
     mod, cls = path.rsplit(".", 1)
-    # tenta com prefixo fxbot. e, se não achar, usa o path “cru”
+    # tenta com prefixo  e, se não achar, usa o path “cru”
     try:
-        m = importlib.import_module(f"fxbot.{mod}")
+        m = importlib.import_module(f"{mod}")
     except ModuleNotFoundError:
         m = importlib.import_module(mod)
     return getattr(m, cls)
