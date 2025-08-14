@@ -164,8 +164,7 @@ class Executor:
                 return None
 
             pos = open_mine[0]
-            from MetaTrader5 import symbol_info_tick
-            t = symbol_info_tick(symbol)
+            t = self.broker.symbol_info_tick(symbol)
             pos_is_buy = (getattr(pos, "side", None) == Side.BUY) or (getattr(pos, "side", None) and getattr(pos, "side").name == "BUY")
             side_match = (pos_is_buy and sig.side == Side.BUY) or ((not pos_is_buy) and sig.side == Side.SELL)
             price_now = t.bid if pos_is_buy else t.ask
