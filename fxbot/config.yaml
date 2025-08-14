@@ -8,6 +8,7 @@ cooldown_minutes: 4
 magic: 5120812
 deviation_points: 30           # slippage um pouco maior p/ horário noturno
 log_every_bar: false           # ligue true só em debug
+log_level: "INFO"
 
 strategy:
   class_path: "strategies.ensemble_router.EnsembleRouter"

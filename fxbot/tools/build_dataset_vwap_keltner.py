@@ -6,6 +6,7 @@ import pandas as pd
 import MetaTrader5 as mt5
 
 from core.utils import ema, atr, adx
+from core.logging import get_logger
 
 _TF = {
     "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,
@@ -123,6 +124,9 @@ def label_triple_barrier(exec_df: pd.DataFrame, i: int, side: str,
     return -1
 
 
+log = get_logger(__name__)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Build dataset VKBP (VWAP + Keltner) com triple-barrier.")
@@ -157,7 +161,7 @@ def main():
 
     rows = []
     for sym in args.symbols:
-        print(f"[{sym}] baixando dados…")
+        log.info(f"[{sym}] baixando dados…")
         df_e = fetch_rates_chunked(
             sym, args.tf_exec, args.bars_exec, args.chunk_size)
         df_r = fetch_rates_chunked(
@@ -170,10 +174,10 @@ def main():
         start = max(200, args.k_ema + 50)
         end = len(df_e) - (args.ahead + 3)
         if end <= start:
-            print(f"[{sym}] poucos dados úteis (start={start}, end={end}). Pulando.")
+            log.warning(f"[{sym}] poucos dados úteis (start={start}, end={end}). Pulando.")
             continue
 
-        print(f"[{sym}] varrendo M5: {((end-start)//stride)+1} amostras…")
+        log.info(f"[{sym}] varrendo M5: {((end-start)//stride)+1} amostras…")
         for i in range(start, end, stride):
             t_i = df_e["time"].iloc[i]
             df_r_win = df_r[df_r["time"] <= t_i].copy()
@@ -248,7 +252,7 @@ def main():
             if short_pull:
                 add_row("SELL", "pullback")
 
-        print(f"[{sym}] amostras acumuladas: {len(rows)}")
+        log.info(f"[{sym}] amostras acumuladas: {len(rows)}")
 
     if not rows:
         raise SystemExit(
@@ -261,7 +265,7 @@ def main():
         df.to_csv(out, index=False)
     else:
         df.to_parquet(out, index=False)
-    print(f"Dataset VKBP salvo em: {out} | shape={df.shape}")
+    log.info(f"Dataset VKBP salvo em: {out} | shape={df.shape}")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,9 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
+from core.logging import get_logger
+
+log = get_logger(__name__)
 
 def find_latest_csv(logs_dir: Path) -> Path | None:
     files = sorted(logs_dir.glob("session_*.csv"))
@@ -130,7 +133,7 @@ def main():
 
     md = build_markdown(summary, [i for i in imgs if i], csv_path)
     md_path, html_path = save_markdown_and_html(md, outdir)
-    print(f"Report gerado em:\n - {md_path}\n - {html_path}")
+    log.info(f"Report gerado em:\n - {md_path}\n - {html_path}")
 
 if __name__ == "__main__":
     main()
