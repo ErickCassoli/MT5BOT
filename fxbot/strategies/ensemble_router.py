@@ -39,6 +39,8 @@ class EnsembleRouter:
                 continue
             if sig is None:
                 continue
+            sig.meta = sig.meta or {}
+            sig.meta.setdefault("strategy", s.__class__.__name__)
             if self.mode == "first":
                 return sig
             if (best is None) or (sig.confidence > best.confidence):

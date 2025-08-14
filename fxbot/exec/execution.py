@@ -54,7 +54,7 @@ class Executor:
         if self.verbose:
             print(
                 f"[SESSION] start={self.session_start} end={self.session_end} baseline={self.baseline}")
-        self.logger.start(self.session_start, self.baseline)
+        self.logger.start(self.session_start, self.baseline, self.strategy.__class__.__name__)
         self.json_summary.start(self.session_start)
 
     def equity_gain_pct(self):
@@ -118,7 +118,7 @@ class Executor:
         return True
 
     def _prepare_signal(self, symbol: str, df_e, df_r, atr_now):
-        """Gera e valida o sinal. Retorna (sinal, risco) ou None."""
+        """Gera e valida o sinal. Retorna (sinal, risco, nome_estratégia) ou None."""
         last = self.last_signal_ts.get(symbol)
         if last and (datetime.utcnow() - last).total_seconds() < self.cfg.cooldown_minutes * 60:
             if self.verbose:
@@ -178,17 +178,19 @@ class Executor:
 
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
 
+        strat_name = sig.meta.get("strategy") if sig.meta and "strategy" in sig.meta else self.strategy.__class__.__name__
         self.logger.log_signal(
             symbol=symbol, side=sig.side.value, atr=sig.atr, conf=sig.confidence,
             dist_up=sig.meta.get("dist_up") if sig.meta else None,
             dist_low=sig.meta.get("dist_low") if sig.meta else None,
             near_thr=sig.meta.get("near_thr") if sig.meta else None,
-            adx_h1=sig.meta.get("adx_h1") if sig.meta else None
+            adx_h1=sig.meta.get("adx_h1") if sig.meta else None,
+            strategy=strat_name
         )
 
-        return sig, risk_now
+        return sig, risk_now, strat_name
 
-    def _place_order(self, symbol: str, sig, risk_now: float):
+    def _place_order(self, symbol: str, sig, risk_now: float, strat_name: str):
         """Envia a ordem ao broker e registra o resultado."""
         from risk.risk_manager import RiskManager
         rm = RiskManager(self.broker, self.cfg.risk)
@@ -200,7 +202,10 @@ class Executor:
         retcode = getattr(r, "retcode", None)
         comment = getattr(r, "comment", "")
         ticket = getattr(r, "order", None)
-        self.logger.log_order(symbol, sig.side.value, req.volume, req.price, req.sl, req.tp, retcode, comment, ticket)
+        self.logger.log_order(
+            symbol, sig.side.value, req.volume, req.price, req.sl, req.tp,
+            retcode, comment, ticket, strategy=strat_name
+        )
         if retcode:
             print(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.utcnow()
@@ -223,9 +228,9 @@ class Executor:
         result = self._prepare_signal(symbol, df_e, df_r, atr_now)
         if result is None:
             return
-        sig, risk_now = result
+        sig, risk_now, strat_name = result
 
-        self._place_order(symbol, sig, risk_now)
+        self._place_order(symbol, sig, risk_now, strat_name)
 
     # -------- gestão das posições ----------
     def manage_open_positions(self):
@@ -297,7 +302,7 @@ class Executor:
             )
             print("\n=== SESSION SUMMARY ===")
             print(text)
-            self.logger.log_summary(text)
+            self.logger.log_summary(text, strategy=self.strategy.__class__.__name__)
 
             payload = {
                 "started_at": self.session_start.isoformat(),
@@ -313,7 +318,6 @@ class Executor:
                 "profit_factor": float(pf) if pf is not None else None,
                 "symbols": list(self.cfg.symbols),
                 "strategy": {
-                    "class": self.cfg.strategy.class_path,
                     "params": self.cfg.strategy.params
                 },
                 "risk": {
@@ -334,7 +338,7 @@ class Executor:
                     "max_concurrent_trades": self.cfg.session.max_concurrent_trades
                 }
             }
-            self.json_summary.write(payload)
+            self.json_summary.write(payload, strategy_class_path=self.cfg.strategy.class_path)
 
         except Exception as e:
             print("Summary error:", e)
