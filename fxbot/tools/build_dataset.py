@@ -7,6 +7,7 @@ import MetaTrader5 as mt5
 # nossas features e utils (rodando como módulo do pacote fxbot)
 from ml.features import compute_features
 from core.utils import atr, ema, adx
+from core.logging import get_logger
 
 _TF = {
     "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,
@@ -67,6 +68,9 @@ def label_triple_barrier(exec_df: pd.DataFrame, i: int, side: str,
     return -1
 
 
+log = get_logger(__name__)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Gera dataset rotulado (features + triple-barrier) a partir do MT5.")
@@ -94,7 +98,7 @@ def main():
 
     all_rows = []
     for sym in args.symbols:
-        print(f"[{sym}] baixando dados…")
+        log.info(f"[{sym}] baixando dados…")
         df_e = fetch_rates(sym, args.tf_exec, args.bars_exec)   # M5
         df_r = fetch_rates(sym, args.tf_regime, args.bars_regime)  # H1
 
@@ -107,11 +111,11 @@ def main():
         start = max(args.donchian + 30, 300)  # ~mín. para donch/ema/atr no M5
         end = len(df_e) - (args.ahead + 3)
         if end <= start:
-            print(
+            log.warning(
                 f"[{sym}] poucos dados após burn-in/horizonte (start={start}, end={end}). Pulando.")
             continue
 
-        print(f"[{sym}] varrendo janelas M5: {end - start} amostras candidatas…")
+        log.info(f"[{sym}] varrendo janelas M5: {end - start} amostras candidatas…")
         for i in range(start, end):
             t_i = df_e['time'].iloc[i]
 
@@ -154,7 +158,7 @@ def main():
                     all_rows.append(
                         {**feats, "symbol": sym, "side": "SELL", "y": int(y), "ts": df_e['time'].iloc[i]})
 
-        print(f"[{sym}] amostras coletadas até agora: {len(all_rows)}")
+        log.info(f"[{sym}] amostras coletadas até agora: {len(all_rows)}")
 
     if not all_rows:
         raise SystemExit(
@@ -170,7 +174,7 @@ def main():
         # requer pyarrow ou fastparquet
         df.to_parquet(out, index=False)
 
-    print(f"Dataset salvo em: {out} | shape={df.shape}")
+    log.info(f"Dataset salvo em: {out} | shape={df.shape}")
 
 
 if __name__ == "__main__":

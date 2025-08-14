@@ -9,6 +9,9 @@ import pandas as pd
 from core.config import load_config
 from adapters.mt5 import MT5Broker
 from core.utils import atr, donchian, ema
+from core.logging import get_logger
+
+log = get_logger(__name__)
 
 
 def import_from_path(path: str):
@@ -44,17 +47,17 @@ def main():
     strat = Strat(cfg.strategy.params, ml_model=ml)
     ml_thr = getattr(ml, "threshold", 0.5) if ml else 0.5
 
-    print(f"[SELFTEST] ml_thr={ml_thr:.3f}  window={cfg.session.start_hour}-{cfg.session.end_hour}h  "
-          f"spread_cap={cfg.spread.hard_cap_points}  atr_ratio={cfg.spread.max_atr_ratio}")
+    log.info(f"[SELFTEST] ml_thr={ml_thr:.3f}  window={cfg.session.start_hour}-{cfg.session.end_hour}h  "
+             f"spread_cap={cfg.spread.hard_cap_points}  atr_ratio={cfg.spread.max_atr_ratio}")
 
     for symbol in cfg.symbols:
-        print("\n---", symbol, "---")
+        log.info(f"\n--- {symbol} ---")
         now_utc = datetime.now(timezone.utc)
         srv = get_server_time(symbol)
         in_window = (cfg.session.start_hour <=
                      now_utc.hour < cfg.session.end_hour)
 
-        print(
+        log.info(
             f"time_utc={now_utc} | server_time≈{srv} | gate_window={in_window}")
 
         df_e = broker.get_rates(symbol, cfg.timeframe_exec, 600)
@@ -66,12 +69,12 @@ def main():
         dyn_cap = cfg.spread.max_atr_ratio * max(a, 1e-12)
         abs_ok = spr_pts <= cfg.spread.hard_cap_points
         dyn_ok = spr_price <= dyn_cap
-        print(
+        log.info(
             f"spread_pts={spr_pts} abs_ok={abs_ok} dyn_ok={dyn_ok} spr_price={spr_price:.6f} atr={a:.6f} dyn_cap={dyn_cap:.6f}")
 
         open_mine = [p for p in broker.positions(
             symbol) if p.magic == cfg.magic]
-        print(
+        log.info(
             f"gate_openpos={'BLOCK' if open_mine else 'OK'} open_count={len(open_mine)}")
 
         # Checagem de proximidade/break
@@ -83,17 +86,17 @@ def main():
         near_thr = float(cfg.strategy.params.get(
             "near_by_atr_ratio", 0.10) * a)
         above_ema20 = c0 > float(ema(df_e["c"], 20).iloc[-1])
-        print(
+        log.info(
             f"dist_up={dist_up:.6f} dist_low={dist_low:.6f} near_thr={near_thr:.6f} above_ema20={above_ema20}")
 
         # Sinal (sem enviar ordem)
         sig = strat.generate_signal(symbol, df_e, df_r)
         if sig is None:
-            print("signal=None (regras da estratégia não passaram)")
+            log.info("signal=None (regras da estratégia não passaram)")
             continue
         prob = float(sig.confidence)
-        print(f"signal={sig.side.value} prob={prob:.3f} ml_thr={ml_thr:.3f} atr={sig.atr:.6f} adx_h1={sig.meta.get('adx_h1') if sig.meta else None}")
-        print("pass_ml_filter=", (prob >= ml_thr))
+        log.info(f"signal={sig.side.value} prob={prob:.3f} ml_thr={ml_thr:.3f} atr={sig.atr:.6f} adx_h1={sig.meta.get('adx_h1') if sig.meta else None}")
+        log.info("pass_ml_filter=%s", (prob >= ml_thr))
 
 
 if __name__ == "__main__":

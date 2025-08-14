@@ -2,6 +2,10 @@
 from collections import defaultdict
 from typing import Callable, Dict, List, Any
 
+from core.logging import get_logger
+
+log = get_logger(__name__)
+
 
 class EventBus:
     def __init__(self):
@@ -15,4 +19,4 @@ class EventBus:
             try:
                 fn(payload)
             except Exception as e:
-                print(f"[bus:{event}] handler error: {e}")
+                log.error(f"[bus:{event}] handler error: {e}")
