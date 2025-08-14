@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, List, Optional
 import pandas as pd
 from core.types import OrderRequest, PositionView
 
@@ -20,6 +20,11 @@ class Broker(ABC):
     def get_digits(self, symbol: str) -> int: ...
     @abstractmethod
     def place_order(self, req: OrderRequest): ...
+
+    @abstractmethod
+    def symbol_info(self, symbol: str) -> Any: ...
+    @abstractmethod
+    def symbol_info_tick(self, symbol: str) -> Any: ...
 
     @abstractmethod
     def positions(self, symbol: Optional[str]

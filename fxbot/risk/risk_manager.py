@@ -30,8 +30,8 @@ class RiskManager:
         return round(entry, digits), round(sl, digits), round(tp, digits)
 
     def lot_by_risk(self, symbol, stop_distance_price: float, risk_pct: float):
-        import MetaTrader5 as mt5
-        info = mt5.symbol_info(symbol)
+        """Calcula o lote com base no risco desejado."""
+        info = self.broker.symbol_info(symbol)
         if not info or stop_distance_price <= 0:
             return 0.0
         tick_value = info.trade_tick_value or 0.0
@@ -49,8 +49,8 @@ class RiskManager:
 
     def build_order(self, symbol: str, side: Side, atr_value: float, confidence: float, magic: int,
                     risk_pct: Optional[float] = None) -> OrderRequest:
-        from MetaTrader5 import symbol_info_tick
-        t = symbol_info_tick(symbol)
+        """Monta a requisição de ordem usando dados do broker."""
+        t = self.broker.symbol_info_tick(symbol)
         entry = t.ask if side == Side.BUY else t.bid
         sl = entry - self.cfg.atr_mult_sl * \
             atr_value if side == Side.BUY else entry + self.cfg.atr_mult_sl*atr_value

@@ -55,6 +55,14 @@ class MT5Broker(Broker):
         }
         return mt5.order_send(mreq)
 
+    def symbol_info(self, symbol: str):
+        """Retorna informações completas do símbolo."""
+        return mt5.symbol_info(symbol)
+
+    def symbol_info_tick(self, symbol: str):
+        """Obtém o último tick do símbolo."""
+        return mt5.symbol_info_tick(symbol)
+
     def positions(self, symbol: Optional[str] = None) -> List[PositionView]:
         poss = mt5.positions_get(symbol=symbol)
         out = []
