@@ -6,6 +6,31 @@ from logs.csv_logger import CSVLogger
 from logs.json_summary import JSONSummary
 
 
+def spread_grace(df_exec, df_regime, atr_now, spread_price, params) -> bool:
+    """Aplica a lógica de "graça" no spread."""
+    try:
+        win = params.get("donchian", 14)
+        c0 = float(df_exec["c"].iloc[-1])
+        adx_h1 = float(adx(df_regime["h"], df_regime["l"], df_regime["c"], 14).iloc[-1])
+        strong_trend = adx_h1 >= max(14.0, params.get("adx_thr", 14) + 2.0)
+
+        near_ratio = params.get("near_by_atr_ratio", params.get("near_vwap_by_atr", 0.30))
+        near_thr = float(near_ratio * atr_now)
+
+        dist_ok = False
+        try:
+            up, lo = donchian(df_exec["h"], df_exec["l"], win)
+            dist_up = max(0.0, float(up.iloc[-1] - c0))
+            dist_low = max(0.0, float(c0 - lo.iloc[-1]))
+            dist_ok = (dist_up <= max(near_thr, 0.2 * atr_now)) or (dist_low <= max(near_thr, 0.2 * atr_now))
+        except Exception:
+            dist_ok = False
+
+        return strong_trend and dist_ok and (spread_price <= 0.95 * max(atr_now, 1e-9))
+    except Exception:
+        return False
+
+
 class Executor:
     def __init__(self, cfg, broker: Broker, strategy, ml_model=None, logger: CSVLogger | None = None):
         self.cfg = cfg
@@ -62,18 +87,16 @@ class Executor:
             return float(after if (after is not None) else max(0.1, base * 0.5))
         return float(base)
 
-    # -------- por símbolo ----------
-    def step_symbol(self, symbol: str):
-        ok, reason = self._can_trade_now()
-        if not ok:
-            if self.verbose:
-                print(f"[{symbol}] skip: {reason}")
-            return
-
+    # -------- utilidades internas ----------
+    def _fetch_data(self, symbol: str):
+        """Busca dados de mercado e calcula o ATR atual."""
         df_e = self.broker.get_rates(symbol, self.cfg.timeframe_exec, 600)
         df_r = self.broker.get_rates(symbol, self.cfg.timeframe_regime, 600)
+        atr_now = float(atr(df_e["h"], df_e["l"], df_e["c"], 14).iloc[-1])
+        return df_e, df_r, atr_now
 
-        atr_now = float(atr(df_e['h'], df_e['l'], df_e['c'], 14).iloc[-1])
+    def _check_spread(self, symbol: str, df_e, df_r, atr_now) -> bool:
+        """Aplica filtros de spread e a possível 'graça'."""
         spread_pts = self.broker.get_spread_points(symbol)
         spread_price = spread_pts * self.broker.get_point(symbol)
         hard_cap = self.cfg.spread.hard_cap_points
@@ -81,38 +104,9 @@ class Executor:
         dyn_ok = spread_price <= dyn_cap
         abs_ok = spread_pts <= hard_cap
 
-        # ----- “graça” contextual no spread -----
         grace_ok = False
         if not dyn_ok and abs_ok:
-            try:
-                # contexto: tendência H1 forte + preço “perto” de romper a janela (Donchian) OU
-                # use o near_* do seu strategy (VKBP) como medida de proximidade
-                win = self.cfg.strategy.params.get("donchian", 14)
-                c0 = float(df_e['c'].iloc[-1])
-                adx_h1 = float(
-                    adx(df_r['h'], df_r['l'], df_r['c'], 14).iloc[-1])
-                strong_trend = adx_h1 >= max(
-                    14.0, self.cfg.strategy.params.get("adx_thr", 14) + 2.0)
-
-                # proximidade (fallbacks: Donchian ou near_* do strategy)
-                near_ratio = self.cfg.strategy.params.get("near_by_atr_ratio",
-                                                          self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
-                near_thr = float(near_ratio * atr_now)
-
-                dist_ok = False
-                try:
-                    up, lo = donchian(df_e['h'], df_e['l'], win)
-                    dist_up = max(0.0, float(up.iloc[-1] - c0))
-                    dist_low = max(0.0, float(c0 - lo.iloc[-1]))
-                    dist_ok = (dist_up <= max(near_thr, 0.2*atr_now)
-                               ) or (dist_low <= max(near_thr, 0.2*atr_now))
-                except Exception:
-                    dist_ok = False
-
-                grace_ok = strong_trend and dist_ok and (
-                    spread_price <= 0.95 * max(atr_now, 1e-9))
-            except Exception:
-                grace_ok = False
+            grace_ok = spread_grace(df_e, df_r, atr_now, spread_price, self.cfg.strategy.params)
 
         if self.verbose:
             print(f"[{symbol}] spread={spread_pts}pts | cap={hard_cap} | spr_price={spread_price:.6f} | atr={atr_now:.6f} | dyn_ok={dyn_ok} | grace_ok={grace_ok}")
@@ -120,88 +114,71 @@ class Executor:
         if not ((dyn_ok or grace_ok) and abs_ok):
             if self.verbose:
                 print(f"[{symbol}] skip: spread filter")
-            return
+            return False
+        return True
 
-        # cooldown
+    def _prepare_signal(self, symbol: str, df_e, df_r, atr_now):
+        """Gera e valida o sinal. Retorna (sinal, risco) ou None."""
         last = self.last_signal_ts.get(symbol)
-        if last and (datetime.utcnow() - last).total_seconds() < self.cfg.cooldown_minutes*60:
+        if last and (datetime.utcnow() - last).total_seconds() < self.cfg.cooldown_minutes * 60:
             if self.verbose:
-                left = self.cfg.cooldown_minutes*60 - \
-                    (datetime.utcnow() - last).total_seconds()
+                left = self.cfg.cooldown_minutes * 60 - (datetime.utcnow() - last).total_seconds()
                 print(f"[{symbol}] skip: cooldown {left:.0f}s")
-            return
+            return None
 
-        # gera sinal
         sig = self.strategy.generate_signal(symbol, df_e, df_r)
 
-        # threshold do modelo (ou 0.5)
         thr = 0.5
         if self.ml_model is not None:
             thr = float(getattr(self.ml_model, "threshold", thr))
 
         if sig is None:
-            # Sem sinal (rompimento/near/EMA/ADX não passaram)
             if self.verbose:
                 if "donchian" in self.cfg.strategy.params:
                     win = self.cfg.strategy.params.get("donchian", 20)
-                    up, lo = donchian(df_e['h'], df_e['l'], win)
-                    c0 = df_e['c'].iloc[-1]
-                    print(
-                        f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}")
+                    up, lo = donchian(df_e["h"], df_e["l"], win)
+                    c0 = df_e["c"].iloc[-1]
+                    print(f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}")
                 else:
-                    near_ratio = self.cfg.strategy.params.get("near_by_atr_ratio",
-                                                              self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
-                    print(
-                        f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
-            return
+                    near_ratio = self.cfg.strategy.params.get("near_by_atr_ratio", self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
+                    print(f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
+            return None
 
         if sig.confidence < thr:
-            # Houve sinal, mas o ML filtrou
             if self.verbose:
                 print(f"[{symbol}] ML-filtered | p={sig.confidence:.3f} < thr={thr:.3f} | atr={sig.atr:.6f} | adx_h1={sig.meta.get('adx_h1') if sig.meta else None}")
-            return
+            return None
 
-        # ----- pyramiding / já tenho posição -----
-        open_mine = [p for p in self.broker.positions(
-            symbol) if p.magic == self.cfg.magic]
-        risk_now = self.current_risk_pct()  # define cedo para poder ajustar no pyramiding
+        open_mine = [p for p in self.broker.positions(symbol) if p.magic == self.cfg.magic]
+        risk_now = self.current_risk_pct()
 
         if open_mine:
             if not getattr(self.cfg.session, "allow_pyramiding", False):
                 if self.verbose:
                     print(f"[{symbol}] skip: already have position")
-                return
+                return None
 
             if len(open_mine) >= getattr(self.cfg.session, "max_stack_per_symbol", 1):
                 if self.verbose:
                     print(f"[{symbol}] skip: max stack per symbol")
-                return
+                return None
 
-            # só empilha se estiver a favor e com lucro suficiente
             pos = open_mine[0]
             from MetaTrader5 import symbol_info_tick
             t = symbol_info_tick(symbol)
-            # robustez no lado
-            pos_is_buy = (getattr(pos, "side", None) == Side.BUY) or (
-                getattr(pos, "side", None) and getattr(pos, "side").name == "BUY")
-            side_match = (pos_is_buy and sig.side == Side.BUY) or (
-                (not pos_is_buy) and sig.side == Side.SELL)
+            pos_is_buy = (getattr(pos, "side", None) == Side.BUY) or (getattr(pos, "side", None) and getattr(pos, "side").name == "BUY")
+            side_match = (pos_is_buy and sig.side == Side.BUY) or ((not pos_is_buy) and sig.side == Side.SELL)
             price_now = t.bid if pos_is_buy else t.ask
-            profit = (
-                price_now - pos.price_open) if pos_is_buy else (pos.price_open - price_now)
-            r_val = abs(pos.price_open - pos.sl) if getattr(pos,
-                                                            "sl", 0) > 0 else sig.atr * self.cfg.risk.atr_mult_sl
+            profit = (price_now - pos.price_open) if pos_is_buy else (pos.price_open - price_now)
+            r_val = abs(pos.price_open - pos.sl) if getattr(pos, "sl", 0) > 0 else sig.atr * self.cfg.risk.atr_mult_sl
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
-                    print(
-                        f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | side_mismatch={not side_match})")
-                return
+                    print(f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | side_mismatch={not side_match})")
+                return None
 
-            # reduz risco da nova entrada
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
 
-        # log do sinal aprovado
         self.logger.log_signal(
             symbol=symbol, side=sig.side.value, atr=sig.atr, conf=sig.confidence,
             dist_up=sig.meta.get("dist_up") if sig.meta else None,
@@ -210,25 +187,46 @@ class Executor:
             adx_h1=sig.meta.get("adx_h1") if sig.meta else None
         )
 
-        # envia ordem
+        return sig, risk_now
+
+    def _place_order(self, symbol: str, sig, risk_now: float):
+        """Envia a ordem ao broker e registra o resultado."""
         from risk.risk_manager import RiskManager
         rm = RiskManager(self.broker, self.cfg.risk)
         if self.verbose and self.cfg.session.continue_after_target and self.equity_gain_pct() >= self.cfg.session.profit_target_pct:
             print(f"[{symbol}] post-target mode: risk_per_trade={risk_now:.2f}%")
 
-        req = rm.build_order(symbol, sig.side, sig.atr,
-                             sig.confidence, self.cfg.magic, risk_pct=risk_now)
+        req = rm.build_order(symbol, sig.side, sig.atr, sig.confidence, self.cfg.magic, risk_pct=risk_now)
         r = self.broker.place_order(req)
         retcode = getattr(r, "retcode", None)
         comment = getattr(r, "comment", "")
         ticket = getattr(r, "order", None)
-        self.logger.log_order(symbol, sig.side.value, req.volume,
-                              req.price, req.sl, req.tp, retcode, comment, ticket)
+        self.logger.log_order(symbol, sig.side.value, req.volume, req.price, req.sl, req.tp, retcode, comment, ticket)
         if retcode:
             print(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.utcnow()
         else:
             print(f"[{symbol}] order error")
+
+    # -------- por símbolo ----------
+    def step_symbol(self, symbol: str):
+        ok, reason = self._can_trade_now()
+        if not ok:
+            if self.verbose:
+                print(f"[{symbol}] skip: {reason}")
+            return
+
+        df_e, df_r, atr_now = self._fetch_data(symbol)
+
+        if not self._check_spread(symbol, df_e, df_r, atr_now):
+            return
+
+        result = self._prepare_signal(symbol, df_e, df_r, atr_now)
+        if result is None:
+            return
+        sig, risk_now = result
+
+        self._place_order(symbol, sig, risk_now)
 
     # -------- gestão das posições ----------
     def manage_open_positions(self):
