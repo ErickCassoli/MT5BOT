@@ -12,6 +12,10 @@ def _configure_root() -> logging.Logger:
         formatter = logging.Formatter("%(asctime)s %(name)s %(levelname)s: %(message)s")
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        root.addHandler(console_handler)
         root.setLevel(logging.INFO)
     return root
 

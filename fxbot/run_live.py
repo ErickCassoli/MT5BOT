@@ -1,4 +1,3 @@
-# fxbot/run_live.py (apenas as linhas do main mudam)
 from pathlib import Path
 from core.config import load_config
 from core.utils import import_from_path

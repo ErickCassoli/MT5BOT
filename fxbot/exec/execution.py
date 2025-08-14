@@ -209,11 +209,11 @@ class Executor:
             symbol, sig.side.value, req.volume, req.price, req.sl, req.tp,
             retcode, comment, ticket, strategy=strat_name
         )
-        if retcode:
+        if retcode is not None:
             log.info(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.utcnow()
         else:
-            log.error(f"[{symbol}] order error")
+            log.error(f"[{symbol}] order error: {comment}")
 
     # -------- por símbolo ----------
     def step_symbol(self, symbol: str):
