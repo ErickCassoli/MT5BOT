@@ -5,6 +5,7 @@ from core.utils import import_from_path
 from adapters.broker import Broker
 from exec.execution import Executor
 from logs.csv_logger import CSVLogger
+from metrics.perf_metrics import PerformanceMetrics
 from datetime import datetime, timezone
 
 PKG_DIR = Path(__file__).resolve().parent
@@ -32,20 +33,29 @@ if __name__ == "__main__":
     strategy = Strat(**cfg.strategy.params)
 
     logger = CSVLogger()
-    ex = Executor(cfg, broker, strategy, ml_model=ml, logger=logger)
+    metrics = PerformanceMetrics()
+    ex = Executor(cfg, broker, strategy, ml_model=ml, logger=logger, metrics=metrics)
     ex.start_session(datetime.now(timezone.utc), broker.account_equity())
     print("Live engine up.")
 
     import time
-    while True:
-        for s in cfg.symbols:
+    try:
+        while True:
+            for s in cfg.symbols:
+                try:
+                    ex.step_symbol(s)
+                except Exception as e:
+                    print(f"[{s}] step error: {e}")
             try:
-                ex.step_symbol(s)
+                ex.manage_open_positions()
+                ex.maybe_summary_once()   # <<< chama o resumo quando der o horário
             except Exception as e:
-                print(f"[{s}] step error: {e}")
-        try:
-            ex.manage_open_positions()
-            ex.maybe_summary_once()   # <<< chama o resumo quando der o horário
-        except Exception as e:
-            print("manage/summary error:", e)
-        time.sleep(5)
+                print("manage/summary error:", e)
+            time.sleep(5)
+    except KeyboardInterrupt:
+        print("Interrupção manual, encerrando...")
+    finally:
+        logs_dir = PKG_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        metrics.export_json(logs_dir / f"metrics_{ts}.json")

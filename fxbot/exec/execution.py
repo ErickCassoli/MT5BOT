@@ -4,10 +4,13 @@ from core.utils import atr, donchian, adx, ema
 from adapters.broker import Broker
 from logs.csv_logger import CSVLogger
 from logs.json_summary import JSONSummary
+from metrics.perf_metrics import PerformanceMetrics
 
 
 class Executor:
-    def __init__(self, cfg, broker: Broker, strategy, ml_model=None, logger: CSVLogger | None = None):
+    def __init__(self, cfg, broker: Broker, strategy, ml_model=None,
+                 logger: CSVLogger | None = None,
+                 metrics: PerformanceMetrics | None = None):
         self.cfg = cfg
         self.broker = broker
         self.strategy = strategy
@@ -18,6 +21,7 @@ class Executor:
         self.last_signal_ts = {s: None for s in cfg.symbols}
         self.verbose = bool(getattr(cfg, "log_every_bar", True))
         self.logger = logger or CSVLogger()
+        self.metrics = metrics
         self._summary_done = False
         self.json_summary = JSONSummary()
 
@@ -209,6 +213,18 @@ class Executor:
             near_thr=sig.meta.get("near_thr") if sig.meta else None,
             adx_h1=sig.meta.get("adx_h1") if sig.meta else None
         )
+        if self.metrics:
+            self.metrics.log_signal(
+                self.strategy.__class__.__name__,
+                symbol=symbol,
+                side=sig.side.value,
+                atr=sig.atr,
+                confidence=sig.confidence,
+                dist_up=sig.meta.get("dist_up") if sig.meta else None,
+                dist_low=sig.meta.get("dist_low") if sig.meta else None,
+                near_thr=sig.meta.get("near_thr") if sig.meta else None,
+                adx_h1=sig.meta.get("adx_h1") if sig.meta else None,
+            )
 
         # envia ordem
         from risk.risk_manager import RiskManager
@@ -224,6 +240,19 @@ class Executor:
         ticket = getattr(r, "order", None)
         self.logger.log_order(symbol, sig.side.value, req.volume,
                               req.price, req.sl, req.tp, retcode, comment, ticket)
+        if self.metrics:
+            self.metrics.log_order(
+                self.strategy.__class__.__name__,
+                symbol=symbol,
+                side=sig.side.value,
+                volume=req.volume,
+                price=req.price,
+                sl=req.sl,
+                tp=req.tp,
+                retcode=retcode,
+                comment=comment,
+                ticket=ticket,
+            )
         if retcode:
             print(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.utcnow()
@@ -300,7 +329,6 @@ class Executor:
             )
             print("\n=== SESSION SUMMARY ===")
             print(text)
-            self.logger.log_summary(text)
 
             payload = {
                 "started_at": self.session_start.isoformat(),
@@ -337,6 +365,9 @@ class Executor:
                     "max_concurrent_trades": self.cfg.session.max_concurrent_trades
                 }
             }
+            self.logger.log_summary(text)
+            if self.metrics:
+                self.metrics.log_result(self.strategy.__class__.__name__, text=text, **payload)
             self.json_summary.write(payload)
 
         except Exception as e:
