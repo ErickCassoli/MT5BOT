@@ -11,7 +11,7 @@ class CSVLogger:
         self.path = None
         self._writer = None
 
-    def start(self, session_start: datetime, baseline_equity: float):
+    def start(self, session_start: datetime, baseline_equity: float, strategy: str | None = None):
         ts = session_start.strftime("%Y%m%d_%H%M%S")
         self.path = self.logs_dir / f"session_{ts}.csv"
         newfile = not self.path.exists()
@@ -22,7 +22,7 @@ class CSVLogger:
             "dist_up","dist_low","near_thr","adx_h1","confidence","ticket","extra"
         ])
         if newfile: self._writer.writeheader()
-        self.log_event("session_start", extra=f"baseline={baseline_equity}")
+        self.log_event("session_start", strategy=strategy, extra=f"baseline={baseline_equity}")
 
     def _write(self, row: dict):
         row["ts"] = datetime.utcnow().isoformat()
