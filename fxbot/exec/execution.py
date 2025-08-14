@@ -183,7 +183,8 @@ class Executor:
             dist_up=sig.meta.get("dist_up") if sig.meta else None,
             dist_low=sig.meta.get("dist_low") if sig.meta else None,
             near_thr=sig.meta.get("near_thr") if sig.meta else None,
-            adx_h1=sig.meta.get("adx_h1") if sig.meta else None
+            adx_h1=sig.meta.get("adx_h1") if sig.meta else None,
+            strategy=self.strategy.__class__.__name__
         )
 
         return sig, risk_now
@@ -200,7 +201,10 @@ class Executor:
         retcode = getattr(r, "retcode", None)
         comment = getattr(r, "comment", "")
         ticket = getattr(r, "order", None)
-        self.logger.log_order(symbol, sig.side.value, req.volume, req.price, req.sl, req.tp, retcode, comment, ticket)
+        self.logger.log_order(
+            symbol, sig.side.value, req.volume, req.price, req.sl, req.tp,
+            retcode, comment, ticket, strategy=self.strategy.__class__.__name__
+        )
         if retcode:
             print(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.utcnow()
@@ -297,7 +301,7 @@ class Executor:
             )
             print("\n=== SESSION SUMMARY ===")
             print(text)
-            self.logger.log_summary(text)
+            self.logger.log_summary(text, strategy=self.strategy.__class__.__name__)
 
             payload = {
                 "started_at": self.session_start.isoformat(),
@@ -313,7 +317,6 @@ class Executor:
                 "profit_factor": float(pf) if pf is not None else None,
                 "symbols": list(self.cfg.symbols),
                 "strategy": {
-                    "class": self.cfg.strategy.class_path,
                     "params": self.cfg.strategy.params
                 },
                 "risk": {
@@ -334,7 +337,7 @@ class Executor:
                     "max_concurrent_trades": self.cfg.session.max_concurrent_trades
                 }
             }
-            self.json_summary.write(payload)
+            self.json_summary.write(payload, strategy_class_path=self.cfg.strategy.class_path)
 
         except Exception as e:
             print("Summary error:", e)
