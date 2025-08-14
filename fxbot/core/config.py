@@ -49,6 +49,7 @@ class AppConfig(BaseModel):
     magic: int = 5120812
     deviation_points: int = 20
     log_every_bar: bool = True
+    log_level: str = "INFO"
     strategy: StrategyConfig = StrategyConfig()
     broker: BrokerConfig = BrokerConfig()
     session: SessionConfig = SessionConfig()

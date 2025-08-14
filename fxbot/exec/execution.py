@@ -4,6 +4,7 @@ from core.utils import atr, donchian, adx, ema
 from adapters.broker import Broker
 from logs.csv_logger import CSVLogger
 from logs.json_summary import JSONSummary
+from core.logging import get_logger
 
 
 def spread_grace(df_exec, df_regime, atr_now, spread_price, params) -> bool:
@@ -31,6 +32,9 @@ def spread_grace(df_exec, df_regime, atr_now, spread_price, params) -> bool:
         return False
 
 
+log = get_logger(__name__)
+
+
 class Executor:
     def __init__(self, cfg, broker: Broker, strategy, ml_model=None, logger: CSVLogger | None = None):
         self.cfg = cfg
@@ -52,8 +56,7 @@ class Executor:
         self.session_end = now_utc + timedelta(hours=self.cfg.session.hours)
         self.baseline = baseline_equity
         if self.verbose:
-            print(
-                f"[SESSION] start={self.session_start} end={self.session_end} baseline={self.baseline}")
+            log.info(f"[SESSION] start={self.session_start} end={self.session_end} baseline={self.baseline}")
         self.logger.start(self.session_start, self.baseline, self.strategy.__class__.__name__)
         self.json_summary.start(self.session_start)
 
@@ -109,11 +112,11 @@ class Executor:
             grace_ok = spread_grace(df_e, df_r, atr_now, spread_price, self.cfg.strategy.params)
 
         if self.verbose:
-            print(f"[{symbol}] spread={spread_pts}pts | cap={hard_cap} | spr_price={spread_price:.6f} | atr={atr_now:.6f} | dyn_ok={dyn_ok} | grace_ok={grace_ok}")
+            log.debug(f"[{symbol}] spread={spread_pts}pts | cap={hard_cap} | spr_price={spread_price:.6f} | atr={atr_now:.6f} | dyn_ok={dyn_ok} | grace_ok={grace_ok}")
 
         if not ((dyn_ok or grace_ok) and abs_ok):
             if self.verbose:
-                print(f"[{symbol}] skip: spread filter")
+                log.info(f"[{symbol}] skip: spread filter")
             return False
         return True
 
@@ -123,7 +126,7 @@ class Executor:
         if last and (datetime.utcnow() - last).total_seconds() < self.cfg.cooldown_minutes * 60:
             if self.verbose:
                 left = self.cfg.cooldown_minutes * 60 - (datetime.utcnow() - last).total_seconds()
-                print(f"[{symbol}] skip: cooldown {left:.0f}s")
+                log.info(f"[{symbol}] skip: cooldown {left:.0f}s")
             return None
 
         sig = self.strategy.generate_signal(symbol, df_e, df_r)
@@ -138,15 +141,15 @@ class Executor:
                     win = self.cfg.strategy.params.get("donchian", 20)
                     up, lo = donchian(df_e["h"], df_e["l"], win)
                     c0 = df_e["c"].iloc[-1]
-                    print(f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}")
+                    log.debug(f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}")
                 else:
                     near_ratio = self.cfg.strategy.params.get("near_by_atr_ratio", self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
-                    print(f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
+                    log.debug(f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
             return None
 
         if sig.confidence < thr:
             if self.verbose:
-                print(f"[{symbol}] ML-filtered | p={sig.confidence:.3f} < thr={thr:.3f} | atr={sig.atr:.6f} | adx_h1={sig.meta.get('adx_h1') if sig.meta else None}")
+                log.info(f"[{symbol}] ML-filtered | p={sig.confidence:.3f} < thr={thr:.3f} | atr={sig.atr:.6f} | adx_h1={sig.meta.get('adx_h1') if sig.meta else None}")
             return None
 
         open_mine = [p for p in self.broker.positions(symbol) if p.magic == self.cfg.magic]
@@ -155,12 +158,12 @@ class Executor:
         if open_mine:
             if not getattr(self.cfg.session, "allow_pyramiding", False):
                 if self.verbose:
-                    print(f"[{symbol}] skip: already have position")
+                    log.info(f"[{symbol}] skip: already have position")
                 return None
 
             if len(open_mine) >= getattr(self.cfg.session, "max_stack_per_symbol", 1):
                 if self.verbose:
-                    print(f"[{symbol}] skip: max stack per symbol")
+                    log.info(f"[{symbol}] skip: max stack per symbol")
                 return None
 
             pos = open_mine[0]
@@ -173,7 +176,7 @@ class Executor:
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
-                    print(f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | side_mismatch={not side_match})")
+                    log.info(f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | side_mismatch={not side_match})")
                 return None
 
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
@@ -195,7 +198,7 @@ class Executor:
         from risk.risk_manager import RiskManager
         rm = RiskManager(self.broker, self.cfg.risk)
         if self.verbose and self.cfg.session.continue_after_target and self.equity_gain_pct() >= self.cfg.session.profit_target_pct:
-            print(f"[{symbol}] post-target mode: risk_per_trade={risk_now:.2f}%")
+            log.info(f"[{symbol}] post-target mode: risk_per_trade={risk_now:.2f}%")
 
         req = rm.build_order(symbol, sig.side, sig.atr, sig.confidence, self.cfg.magic, risk_pct=risk_now)
         r = self.broker.place_order(req)
@@ -207,17 +210,17 @@ class Executor:
             retcode, comment, ticket, strategy=strat_name
         )
         if retcode:
-            print(f"[{symbol}] order ret={retcode} {comment}")
+            log.info(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.utcnow()
         else:
-            print(f"[{symbol}] order error")
+            log.error(f"[{symbol}] order error")
 
     # -------- por símbolo ----------
     def step_symbol(self, symbol: str):
         ok, reason = self._can_trade_now()
         if not ok:
             if self.verbose:
-                print(f"[{symbol}] skip: {reason}")
+                log.info(f"[{symbol}] skip: {reason}")
             return
 
         df_e, df_r, atr_now = self._fetch_data(symbol)
@@ -300,8 +303,8 @@ class Executor:
             ) if closed > 0 else (
                 f"baseline={self.baseline:.2f} | equity_now={eq_now:.2f} | gain_pct={gain_pct:.2f}% | realized_pnl={realized:.2f} | closed_trades=0"
             )
-            print("\n=== SESSION SUMMARY ===")
-            print(text)
+            log.info("\n=== SESSION SUMMARY ===")
+            log.info(text)
             self.logger.log_summary(text, strategy=self.strategy.__class__.__name__)
 
             payload = {
@@ -341,6 +344,6 @@ class Executor:
             self.json_summary.write(payload, strategy_class_path=self.cfg.strategy.class_path)
 
         except Exception as e:
-            print("Summary error:", e)
+            log.error("Summary error: %s", e)
         finally:
             self._summary_done = True
