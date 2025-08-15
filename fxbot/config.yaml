@@ -1,4 +1,4 @@
-# ===================== FXBOT CONFIG — 24/7 (VKBP, alta precisão) =====================
+# ===================== FXBOT CONFIG — 24/7 (APENAS ESTRATÉGIAS) =====================
 
 symbols: ["USDJPY", "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "EURJPY"]
 
@@ -6,8 +6,8 @@ timeframe_exec: "M5"
 timeframe_regime: "H1"
 cooldown_minutes: 6
 magic: 5120812
-log_level: "DEBUG"     # pra ver os debug logs
-log_every_bar: true    # Executor fica “verboso”
+log_level: "DEBUG"         # logs detalhados
+log_every_bar: true        # executor verboso a cada barra
 
 strategy:
   class_path: "strategies.ensemble_router.EnsembleRouter"
@@ -18,53 +18,55 @@ strategy:
         params:
           k_ema_len: 20
           k_atr_len: 10
-          k_mult: 1.6          # de 1.8 -> 1.6 (banda um pouco mais estreita = facilita breakout)
-          adx_thr: 13          # de 14 -> 13
+          k_mult: 1.6
+          adx_thr: 13
           rsi_len: 14
-          rsi_trig: 48         # de 50 -> 48 (sem ficar permissivo demais)
-          near_vwap_by_atr: 0.45  # de 0.35 -> 0.45 (pullback menos “colado”)
+          rsi_trig: 48
+          near_vwap_by_atr: 0.45
           confirm_ema20: true
           allow_break_close: true
+          min_break_atr: 0.08
+          min_room_atr: 1.00
           min_bars: 150
           donchian: 16
 
       - class_path: "strategies.donchian_adx.DonchianADX"
         params:
-          donchian: 14         # de 16 -> 14 (rompimentos um pouco mais frequentes)
-          adx_thr: 16          # de 18 -> 16
+          donchian: 14
+          adx_thr: 16
           ema_fast: 20
           ema_mid: 50
           ema_slow: 200
           allow_close_break: true
+          min_break_atr: 0.08
           min_bars: 150
-          boost_strong_adx: 5
-
 
       - class_path: "strategies.breakout_volume.BreakoutVolume"
         params:
           sr_win: 24
           vol_lookback: 20
-          vol_mult: 1.4        # de 1.6 -> 1.4 (tick_volume do FX é “raro” fora do pico)
+          vol_mult: 1.4
           adx_thr: 12
           allow_retest: true
           min_bars: 200
-
+          min_break_atr: 0.08
+          retest_vol_relax: 0.85
 
       - class_path: "strategies.scalper_rsi_bb.ScalperRSIBB"
         params:
           rsi_len: 14
-          rsi_buy: 25               # reversões mais extremas
+          rsi_buy: 25
           rsi_sell: 75
           bb_len: 20
           bb_k: 2.0
-          max_adx_h1: 16            # só em lateral mesmo
-          min_bars: 150
-#      # Para desativar o Scalper temporariamente, comente o bloco acima.
+          max_adx_h1: 18
+          min_bars: 120
+# Para desativar o Scalper temporariamente, comente o bloco acima.
 
 broker:
   class_path: "adapters.mt5.MT5Broker"
   params:
-    deviation: 30               # slippage tolerada; usado pelo adapters.mt5
+    deviation: 30
     # type_filling:
     # type_time:
     # login:
@@ -78,7 +80,7 @@ session:
   profit_target_pct: 3.0
   loss_limit_pct: 4.0
   continue_after_target: true
-  max_concurrent_trades: 3      # ↓ menos exposição simultânea
+  max_concurrent_trades: 3
   allow_pyramiding: false
   max_stack_per_symbol: 2
   min_stack_increase_r: 0.5
@@ -89,20 +91,20 @@ risk:
   risk_per_trade_pct_after_target: 0.20
   atr_mult_sl: 1.6
   atr_mult_tp: 3.2
-  atr_trail_mult: 1.15           # trail um pouco mais “solto”
-  partial_at_1r: 0.4             # realiza menos na parcial para deixar correr
-  partial_r: 1.0                 # (novo) R para fazer a parcial
-  trail_start_r: 1.2             # (novo) só ativa BE/trailing a partir de 1.2R
+  atr_trail_mult: 1.15
+  partial_at_1r: 0.4
+  partial_r: 1.0
+  trail_start_r: 1.2
 
 spread:
-  hard_cap_points: 35            # majors: corta alguns horários ruins
-  max_atr_ratio: 0.70            # spread relativo mais rígido
+  hard_cap_points: 35
+  max_atr_ratio: 0.70
 
-ml_model:
-  class_path: "ml.xgb_model.XGBModel"
-  params:
-    path: "models/xgb_v5_super.pkl"
-    # min_prob: 0.45             # opcional: força base mais conservadora; o executor já ajusta dinamicamente
+# ml_model:
+#   class_path: "ml.xgb_model.XGBModel"
+#   params:
+#     path: "models/xgb_v5_super.pkl"
+#     min_prob: 0.30             # opcional: força base mais conservadora; o executor já ajusta dinamicamente
 
 # Dica: se o número de sinais ficar baixo demais, os “dials” mais seguros pra soltar um pouco são (nessa ordem):
 # max_atr_ratio: 0.75, k_mult: 1.9, donchian: 18, vol_mult: 1.7.

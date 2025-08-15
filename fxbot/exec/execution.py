@@ -57,6 +57,7 @@ class Executor:
         self.verbose = bool(getattr(cfg, "log_every_bar", True))
         self._summary_done = False
         self.json_summary = JSONSummary()
+        self._ml_thr_logged = False  # logar a origem do threshold apenas 1x
 
     # -------- sessão / equity ----------
     def start_session(self, now_utc: datetime, baseline_equity: float):
@@ -147,28 +148,56 @@ class Executor:
 
         sig = self.strategy.generate_signal(symbol, df_e, df_r)
 
-        # --- ML threshold dinâmico ---
-        # Base: threshold do modelo (se houver) ou 0.60 quando sem ML (mais conservador)
-        if self.ml_model is not None:
-            thr = float(getattr(self.ml_model, "threshold", 0.50))
-        else:
-            thr = 0.60
+        # --- ML threshold base: config.min_prob > model.threshold > default ---
+        thr_cfg = None
+        try:
+            ml_cfg = getattr(self.cfg, "ml_model", None)
+            if ml_cfg:
+                # quando for dict (caso comum do YAML)
+                if isinstance(ml_cfg, dict):
+                    params = ml_cfg.get("params") or {}
+                    if "min_prob" in params and params["min_prob"] is not None:
+                        thr_cfg = float(params["min_prob"])
+                else:
+                    # compat: objeto com .params
+                    params = getattr(ml_cfg, "params", None)
+                    if params and getattr(params, "min_prob", None) is not None:
+                        thr_cfg = float(getattr(params, "min_prob"))
+        except Exception:
+            thr_cfg = None
 
-        # Ajustes condicionais (spread/ADX)
-        # - endurece quando spread relativo é alto
-        spr_rel = (self.broker.get_spread_points(symbol) * self.broker.get_point(symbol)) / max(atr_now, 1e-9)
+        thr_model = float(getattr(self.ml_model, "threshold", 0.5)) if self.ml_model is not None else 0.5
+        thr_base = (
+            float(thr_cfg)
+            if (thr_cfg is not None)
+            else (thr_model if self.ml_model is not None else 0.60)  # sem ML: default mais conservador
+        )
+
+        # Loga a fonte do threshold apenas 1x por sessão
+        if self.ml_model is not None and not self._ml_thr_logged:
+            src = "config.min_prob" if (thr_cfg is not None) else "model.threshold"
+            log.info(f"[ML] gate threshold em uso = {thr_base:.3f} (fonte={src})")
+            self._ml_thr_logged = True
+
+        # --- Ajustes condicionais (spread/ADX) em cima do thr_base ---
+        thr = float(thr_base)
         reasons = []
+
+        # Spread relativo ao ATR (mais caro => endurece)
+        spr_rel = (self.broker.get_spread_points(symbol) * self.broker.get_point(symbol)) / max(atr_now, 1e-9)
         if spr_rel > 0.60:
             thr += 0.03
             reasons.append("spread_rel>0.60")
-        # - relaxa um pouco se ADX(H1) muito forte
+
+        # ADX(H1) muito forte => relaxa um pouco
         adx_h1 = None
         if sig and getattr(sig, "meta", None):
             adx_h1 = sig.meta.get("adx_h1")
             if adx_h1 and adx_h1 >= 25:
                 thr -= 0.02
                 reasons.append("adx_h1>=25")
-        # clamp do threshold
+
+        # clamp defensivo
         thr = max(0.40, min(0.75, thr))
 
         if sig is None:
@@ -212,7 +241,9 @@ class Executor:
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
-                    log.info(f"[{symbol}] skip: pirâmide inválida (R={profit/max(r_val,1e-9):.2f} side_match={side_match})")
+                    log.info(
+                        f"[{symbol}] skip: pirâmide inválida (R={profit/max(r_val,1e-9):.2f} side_match={side_match})"
+                    )
                 return None
 
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
