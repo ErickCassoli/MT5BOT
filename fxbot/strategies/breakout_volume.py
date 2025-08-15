@@ -1,84 +1,125 @@
+# strategies/breakout_volume.py
 from __future__ import annotations
-from typing import Optional, Dict, Any
-import numpy as np
+from types import SimpleNamespace
+from typing import Optional
+
 import pandas as pd
 
-from core.types import Signal, Side
-from core.utils import atr, adx, donchian, ema
-
-
-def _get_volume(series_frame: pd.DataFrame) -> pd.Series:
-    if "v" in series_frame:
-        return series_frame["v"]
-    if "tick_volume" in series_frame:
-        return series_frame["tick_volume"]
-    return pd.Series(1.0, index=series_frame.index)
-
+from core.types import Side
+from core.utils import atr as _atr, adx as _adx
 
 class BreakoutVolume:
     """
-    Rompimento de S/R (Donchian) com confirmação de volume (tick volume) acima da média.
+    Expansão com volume:
+      - Rompe SR dos últimos N (sr_win), com volume > vol_mult * média(vol_lookback)
+      - Regime: ADX(H1) >= adx_thr
+      - Permite retest (close volta pra faixa e sai novamente)
     """
 
-    def __init__(self, **params):
-        self.sr_win: int = int(params.get("sr_win", 24))
-        self.vol_lb: int = int(params.get("vol_lookback", 20))
-        # vol_atual > vol_mult * média
-        self.vol_mult: float = float(params.get("vol_mult", 1.5))
-        self.adx_thr: float = float(params.get(
-            "adx_thr", 12.0))   # leve filtro de regime
-        self.min_bars: int = int(params.get("min_bars", 200))
-        self.use_ret_test: bool = bool(params.get(
-            "allow_retest", True))  # aceita reteste imediato
+    def __init__(
+        self,
+        sr_win: int = 24,
+        vol_lookback: int = 20,
+        vol_mult: float = 1.6,
+        adx_thr: int = 12,
+        allow_retest: bool = True,
+        min_bars: int = 200,
+        ml_model=None,
+        **__,
+    ):
+        self.sr_win = int(sr_win)
+        self.vol_lookback = int(vol_lookback)
+        self.vol_mult = float(vol_mult)
+        self.adx_thr = int(adx_thr)
+        self.allow_retest = bool(allow_retest)
+        self.min_bars = int(min_bars)
+        self.ml = ml_model
 
-    def generate_signal(self, symbol: str, df_e: pd.DataFrame, df_r: pd.DataFrame) -> Optional[Signal]:
-        if len(df_e) < max(self.min_bars, self.sr_win + self.vol_lb + 5) or len(df_r) < 150:
+    def _ml_conf(self, feats: dict) -> Optional[float]:
+        if self.ml is None:
+            return None
+        try:
+            import pandas as pd
+            if hasattr(self.ml, "predict_proba_dict"):
+                return float(self.ml.predict_proba_dict(feats))
+            if hasattr(self.ml, "predict_proba"):
+                X = pd.DataFrame([feats])
+                proba = self.ml.predict_proba(X)
+                if hasattr(proba, "shape") and proba.shape[1] >= 2:
+                    return float(proba[0, 1])
+                return float(proba[0])
+            if hasattr(self.ml, "predict"):
+                return float(self.ml.predict([feats])[0])
+        except Exception:
+            return None
+        return None
+
+    def generate_signal(self, symbol: str, df_e: pd.DataFrame, df_r: pd.DataFrame):
+        if len(df_e) < max(self.min_bars, self.sr_win + 5) or len(df_r) < 50:
             return None
 
-        # Filtro de regime leve (não é obrigatório super forte)
-        adx_h1 = adx(df_r["h"], df_r["l"], df_r["c"], 14)
-        if float(adx_h1.iloc[-1]) < self.adx_thr:
+        # Regime
+        adx_h1 = float(_adx(df_r["h"], df_r["l"], df_r["c"], 14).iloc[-1])
+        if adx_h1 < self.adx_thr:
             return None
 
-        up, lo = donchian(df_e["h"], df_e["l"], self.sr_win)
-        a = atr(df_e["h"], df_e["l"], df_e["c"], 14)
-        a0 = float(a.iloc[-1])
-        c0 = float(df_e["c"].iloc[-1])
-        if a0 <= 0 or not np.isfinite(a0):
-            return None
+        # SR + volume
+        c = df_e["c"].astype(float)
+        h = df_e["h"].astype(float)
+        l = df_e["l"].astype(float)
+        v = df_e["v"].astype(float)
 
-        vol = _get_volume(df_e)
-        v_now = float(vol.iloc[-1])
-        v_ma = float(vol.rolling(self.vol_lb).mean().iloc[-1])
-        if not np.isfinite(v_ma) or v_ma <= 0:
-            return None
+        atr_now = float(_atr(h, l, c, 14).iloc[-1])
+        sr_high = h.rolling(self.sr_win, min_periods=self.sr_win).max().iloc[-2]  # ultimo SR completo
+        sr_low = l.rolling(self.sr_win, min_periods=self.sr_win).min().iloc[-2]
+        vol_avg = v.rolling(self.vol_lookback, min_periods=self.vol_lookback).mean().iloc[-1]
+        vol_now = float(v.iloc[-1])
 
-        broke_up = c0 > float(up.iloc[-1])
-        broke_down = c0 < float(lo.iloc[-1])
-        if not (broke_up or broke_down):
-            return None
+        c0 = float(c.iloc[-1])
+        broke_up = c0 > sr_high and (vol_now >= self.vol_mult * vol_avg if vol_avg > 0 else False)
+        broke_down = c0 < sr_low and (vol_now >= self.vol_mult * vol_avg if vol_avg > 0 else False)
 
-        # Confirmação de volume
-        if v_now < self.vol_mult * v_ma:
-            # checa reteste (candle volta e em seguida retoma com vol > média)
-            if not self.use_ret_test:
-                return None
-
-        side = Side.BUY if broke_up else Side.SELL
-
-        # confiança: pico de volume + quanto passou do nível em ATR + ADX
-        spike = (v_now / v_ma) if v_ma > 0 else 1.0
-        edge = abs((c0 - float(up.iloc[-1])) if side ==
-                   Side.BUY else (float(lo.iloc[-1]) - c0)) / max(a0, 1e-9)
-        conf = 0.60 + min(0.15, 0.06 * (spike - 1.0)) + min(0.10, 0.05 * edge) + \
-            min(0.05, 0.01 * (float(adx_h1.iloc[-1]) - self.adx_thr))
-        conf = float(min(0.95, max(0.50, conf)))
-
-        meta: Dict[str, Any] = {
-            "vol_now": v_now,
-            "vol_mean": v_ma,
-            "spike": float(spike),
-            "sr_win": self.sr_win,
-            "adx_h1": float(adx_h1.iloc[-1]),
+        meta = {
+            "strategy": "BreakoutVolume",
+            "adx_h1": adx_h1,
+            "sr_high": float(sr_high),
+            "sr_low": float(sr_low),
+            "vol_now": float(vol_now),
+            "vol_avg": float(vol_avg),
         }
-        return Signal(symbol=symbol, side=side, atr=a0, confidence=conf, meta=meta)
+
+        if broke_up:
+            feats = {
+                "adx_h1": adx_h1,
+                "vol_ratio": (vol_now / max(vol_avg, 1e-9)),
+                "break_dist": (c0 - sr_high) / max(atr_now, 1e-9),
+                "atr_now": atr_now,
+            }
+            conf = self._ml_conf(feats)
+            if conf is None:
+                conf = 0.61
+            return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
+
+        if broke_down:
+            feats = {
+                "adx_h1": adx_h1,
+                "vol_ratio": (vol_now / max(vol_avg, 1e-9)),
+                "break_dist": (sr_low - c0) / max(atr_now, 1e-9),
+                "atr_now": atr_now,
+            }
+            conf = self._ml_conf(feats)
+            if conf is None:
+                conf = 0.60
+            return SimpleNamespace(side=Side.SELL, confidence=float(conf), atr=atr_now, meta=meta)
+
+        # Retest (opcional): último candle rompeu e o atual confirma
+        if self.allow_retest and len(df_e) >= self.sr_win + 3:
+            c1 = float(c.iloc[-2])
+            if c1 > sr_high and c0 > c1:
+                conf = self._ml_conf({"adx_h1": adx_h1, "retest": 1.0, "atr_now": atr_now}) or 0.58
+                return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
+            if c1 < sr_low and c0 < c1:
+                conf = self._ml_conf({"adx_h1": adx_h1, "retest": 1.0, "atr_now": atr_now}) or 0.58
+                return SimpleNamespace(side=Side.SELL, confidence=float(conf), atr=atr_now, meta=meta)
+
+        return None

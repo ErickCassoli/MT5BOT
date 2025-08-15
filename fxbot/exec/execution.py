@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import math
+
 from core.types import Side
 from core.utils import atr, donchian, adx, ema
 from adapters.broker import Broker
@@ -8,7 +10,7 @@ from core.logging import get_logger
 
 
 def spread_grace(df_exec, df_regime, atr_now, spread_price, params) -> bool:
-    """Aplica a lógica de "graça" no spread."""
+    """Aplica a lógica de 'graça' no spread em tendência forte e preço próximo a Donchian."""
     try:
         win = params.get("donchian", 14)
         c0 = float(df_exec["c"].iloc[-1])
@@ -33,6 +35,14 @@ def spread_grace(df_exec, df_regime, atr_now, spread_price, params) -> bool:
 
 
 log = get_logger(__name__)
+
+
+def _decimals_from_step(step: float) -> int:
+    """Casas decimais necessárias para quantizar pelo step (ex.: 0.01 -> 2)."""
+    if step >= 1 or step <= 0:
+        return 0
+    s = f"{step:.10f}".rstrip("0")
+    return len(s.split(".")[1]) if "." in s else 0
 
 
 class Executor:
@@ -62,11 +72,11 @@ class Executor:
 
     def equity_gain_pct(self):
         eq = self.broker.account_equity()
-        return max(0.0, (eq - self.baseline)/self.baseline*100) if self.baseline else 0.0
+        return max(0.0, (eq - self.baseline) / self.baseline * 100) if self.baseline else 0.0
 
     def equity_dd_pct(self):
         eq = self.broker.account_equity()
-        return max(0.0, (self.baseline - eq)/self.baseline*100) if self.baseline else 0.0
+        return max(0.0, (self.baseline - eq) / self.baseline * 100) if self.baseline else 0.0
 
     # -------- regras globais ----------
     def _can_trade_now(self):
@@ -79,7 +89,10 @@ class Executor:
             return False, f"profit target hit {self.equity_gain_pct():.2f}%"
         if self.equity_dd_pct() >= self.cfg.session.loss_limit_pct:
             return False, f"loss limit hit {self.equity_dd_pct():.2f}%"
-        if len(self.broker.positions()) >= self.cfg.session.max_concurrent_trades:
+
+        # Limite de concorrência apenas para posições com o nosso magic
+        open_mine = [p for p in self.broker.positions() if p.magic == self.cfg.magic]
+        if len(open_mine) >= self.cfg.session.max_concurrent_trades:
             return False, "max concurrent trades reached"
         return True, ""
 
@@ -112,7 +125,10 @@ class Executor:
             grace_ok = spread_grace(df_e, df_r, atr_now, spread_price, self.cfg.strategy.params)
 
         if self.verbose:
-            log.debug(f"[{symbol}] spread={spread_pts}pts | cap={hard_cap} | spr_price={spread_price:.6f} | atr={atr_now:.6f} | dyn_ok={dyn_ok} | grace_ok={grace_ok}")
+            log.debug(
+                f"[{symbol}] spread={spread_pts}pts | cap={hard_cap} | spr_price={spread_price:.6f} | "
+                f"atr={atr_now:.6f} | dyn_ok={dyn_ok} | grace_ok={grace_ok}"
+            )
 
         if not ((dyn_ok or grace_ok) and abs_ok):
             if self.verbose:
@@ -122,10 +138,11 @@ class Executor:
 
     def _prepare_signal(self, symbol: str, df_e, df_r, atr_now):
         """Gera e valida o sinal. Retorna (sinal, risco, nome_estratégia) ou None."""
+        now = datetime.now(timezone.utc)
         last = self.last_signal_ts.get(symbol)
-        if last and (datetime.utcnow() - last).total_seconds() < self.cfg.cooldown_minutes * 60:
+        if last and (now - last).total_seconds() < self.cfg.cooldown_minutes * 60:
             if self.verbose:
-                left = self.cfg.cooldown_minutes * 60 - (datetime.utcnow() - last).total_seconds()
+                left = self.cfg.cooldown_minutes * 60 - (now - last).total_seconds()
                 log.info(f"[{symbol}] skip: cooldown {left:.0f}s")
             return None
 
@@ -141,15 +158,23 @@ class Executor:
                     win = self.cfg.strategy.params.get("donchian", 20)
                     up, lo = donchian(df_e["h"], df_e["l"], win)
                     c0 = df_e["c"].iloc[-1]
-                    log.debug(f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}")
+                    log.debug(
+                        f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | "
+                        f"dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}"
+                    )
                 else:
-                    near_ratio = self.cfg.strategy.params.get("near_by_atr_ratio", self.cfg.strategy.params.get("near_vwap_by_atr", 0.30))
+                    near_ratio = self.cfg.strategy.params.get(
+                        "near_by_atr_ratio", self.cfg.strategy.params.get("near_vwap_by_atr", 0.30)
+                    )
                     log.debug(f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
             return None
 
         if sig.confidence < thr:
             if self.verbose:
-                log.info(f"[{symbol}] ML-filtered | p={sig.confidence:.3f} < thr={thr:.3f} | atr={sig.atr:.6f} | adx_h1={sig.meta.get('adx_h1') if sig.meta else None}")
+                log.info(
+                    f"[{symbol}] ML-filtered | p={sig.confidence:.3f} < thr={thr:.3f} | "
+                    f"atr={sig.atr:.6f} | adx_h1={sig.meta.get('adx_h1') if sig.meta else None}"
+                )
             return None
 
         open_mine = [p for p in self.broker.positions(symbol) if p.magic == self.cfg.magic]
@@ -168,27 +193,35 @@ class Executor:
 
             pos = open_mine[0]
             t = self.broker.symbol_info_tick(symbol)
-            pos_is_buy = (getattr(pos, "side", None) == Side.BUY) or (getattr(pos, "side", None) and getattr(pos, "side").name == "BUY")
+            pos_is_buy = (getattr(pos, "side", None) == Side.BUY) or (
+                getattr(pos, "side", None) and getattr(pos, "side").name == "BUY"
+            )
             side_match = (pos_is_buy and sig.side == Side.BUY) or ((not pos_is_buy) and sig.side == Side.SELL)
             price_now = t.bid if pos_is_buy else t.ask
             profit = (price_now - pos.price_open) if pos_is_buy else (pos.price_open - price_now)
-            r_val = abs(pos.price_open - pos.sl) if getattr(pos, "sl", 0) > 0 else sig.atr * self.cfg.risk.atr_mult_sl
+            r_val = abs(pos.price_open - (pos.sl or pos.price_open)) if getattr(pos, "sl", 0) > 0 else sig.atr * self.cfg.risk.atr_mult_sl
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
-                    log.info(f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | side_mismatch={not side_match})")
+                    log.info(
+                        f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | "
+                        f"side_mismatch={not side_match})"
+                    )
                 return None
 
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
 
         strat_name = sig.meta.get("strategy") if sig.meta and "strategy" in sig.meta else self.strategy.__class__.__name__
         self.logger.log_signal(
-            symbol=symbol, side=sig.side.value, atr=sig.atr, conf=sig.confidence,
+            symbol=symbol,
+            side=sig.side.value,
+            atr=sig.atr,
+            conf=sig.confidence,
             dist_up=sig.meta.get("dist_up") if sig.meta else None,
             dist_low=sig.meta.get("dist_low") if sig.meta else None,
             near_thr=sig.meta.get("near_thr") if sig.meta else None,
             adx_h1=sig.meta.get("adx_h1") if sig.meta else None,
-            strategy=strat_name
+            strategy=strat_name,
         )
 
         return sig, risk_now, strat_name
@@ -196,6 +229,7 @@ class Executor:
     def _place_order(self, symbol: str, sig, risk_now: float, strat_name: str):
         """Envia a ordem ao broker e registra o resultado."""
         from risk.risk_manager import RiskManager
+
         rm = RiskManager(self.broker, self.cfg.risk)
         if self.verbose and self.cfg.session.continue_after_target and self.equity_gain_pct() >= self.cfg.session.profit_target_pct:
             log.info(f"[{symbol}] post-target mode: risk_per_trade={risk_now:.2f}%")
@@ -205,13 +239,14 @@ class Executor:
         retcode = getattr(r, "retcode", None)
         comment = getattr(r, "comment", "")
         ticket = getattr(r, "order", None)
+
         self.logger.log_order(
-            symbol, sig.side.value, req.volume, req.price, req.sl, req.tp,
-            retcode, comment, ticket, strategy=strat_name
+            symbol, sig.side.value, req.volume, req.price, req.sl, req.tp, retcode, comment, ticket, strategy=strat_name
         )
+
         if retcode is not None:
             log.info(f"[{symbol}] order ret={retcode} {comment}")
-            self.last_signal_ts[symbol] = datetime.utcnow()
+            self.last_signal_ts[symbol] = datetime.now(timezone.utc)
         else:
             log.error(f"[{symbol}] order error: {comment}")
 
@@ -240,33 +275,44 @@ class Executor:
         for p in self.broker.positions():
             if p.magic != self.cfg.magic:
                 continue
-            df = self.broker.get_rates(p.symbol, self.cfg.timeframe_exec, 200)
-            a = float(atr(df['h'], df['l'], df['c'], 14).iloc[-1])
-            r_val = abs(p.price_open - p.sl) if getattr(p, "sl",
-                                                        0) > 0 else self.cfg.risk.atr_mult_sl * a
 
-            from MetaTrader5 import symbol_info_tick
-            t = symbol_info_tick(p.symbol)
+            df = self.broker.get_rates(p.symbol, self.cfg.timeframe_exec, 200)
+            a = float(atr(df["h"], df["l"], df["c"], 14).iloc[-1])
+
+            # R por posição
+            r_val = abs(p.price_open - p.sl) if getattr(p, "sl", 0) > 0 else self.cfg.risk.atr_mult_sl * a
+
+            t = self.broker.symbol_info_tick(p.symbol)
             is_buy = (p.side == Side.BUY)
             price_now = t.bid if is_buy else t.ask
-            profit = (
-                price_now - p.price_open) if is_buy else (p.price_open - price_now)
+            profit = (price_now - p.price_open) if is_buy else (p.price_open - price_now)
 
-            # parcial em 1R
-            if profit >= r_val and p.volume > 0.01:
-                vol = round(p.volume * self.cfg.risk.partial_at_1r, 2)
-                if vol >= 0.01:
-                    self.broker.close_position(p.ticket, vol)
-                    self.logger.log_partial(p.symbol, p.ticket, vol)
+            # ---- Parcial em 1R (respeitando volume_min/step do símbolo) ----
+            info = self.broker.symbol_info(p.symbol)
+            step = float(getattr(info, "volume_step", 0.01) or 0.01)
+            vol_min = float(getattr(info, "volume_min", 0.01) or 0.01)
+            dec = _decimals_from_step(step)
 
-            # trailing + BE
+            if profit >= r_val and p.volume > vol_min:
+                vol_target = p.volume * float(self.cfg.risk.partial_at_1r)
+                vol_q = math.floor(vol_target / step) * step
+                vol_q = max(vol_min, min(vol_q, p.volume))  # não ultrapassar o volume da posição
+                vol_q = round(vol_q, dec)
+
+                if vol_q >= vol_min and vol_q <= p.volume - step + 1e-12:
+                    self.broker.close_position(p.ticket, vol_q)
+                    self.logger.log_partial(p.symbol, p.ticket, vol_q)
+
+            # ---- Trailing + Break-even ----
             new_sl = p.sl
             if profit >= r_val:
                 be = p.price_open
-                trail = self.cfg.risk.atr_trail_mult * a
-                new_sl = max(be, price_now -
-                             trail) if is_buy else min(be, price_now + trail)
-                if abs((new_sl or 0) - (p.sl or 0)) > self.broker.get_point(p.symbol) * 2:
+                trail = float(self.cfg.risk.atr_trail_mult) * a
+                new_sl = max(be, price_now - trail) if is_buy else min(be, price_now + trail)
+
+                # atualiza SL apenas se mover pelo menos 2 pontos
+                pt = self.broker.get_point(p.symbol)
+                if abs((new_sl or 0) - (p.sl or 0)) > pt * 2:
                     self.broker.modify_sltp(p.ticket, new_sl, p.tp)
                     self.logger.log_sltp(p.symbol, p.ticket, new_sl, p.tp)
 
@@ -277,19 +323,16 @@ class Executor:
             return
         try:
             df = self.broker.history_deals_df(self.session_start, now)
-            realized = float(df["profit"].sum()
-                             ) if df is not None and not df.empty else 0.0
+            realized = float(df["profit"].sum()) if df is not None and not df.empty else 0.0
             wins = losses = 0
             pf = None
             if df is not None and not df.empty:
                 agg = df.groupby("position_id")["profit"].sum()
                 wins = int((agg > 0).sum())
                 losses = int((agg < 0).sum())
-                pos_profit = float(agg[agg > 0].sum()) if (
-                    agg > 0).any() else 0.0
-                pos_loss = float(agg[agg < 0].sum()) if (
-                    agg < 0).any() else 0.0
-                pf = (pos_profit/abs(pos_loss)) if pos_loss < 0 else None
+                pos_profit = float(agg[agg > 0].sum()) if (agg > 0).any() else 0.0
+                pos_loss = float(agg[agg < 0].sum()) if (agg < 0).any() else 0.0
+                pf = (pos_profit / abs(pos_loss)) if pos_loss < 0 else None
 
             eq_now = self.broker.account_equity()
             gain_pct = self.equity_gain_pct()
@@ -298,8 +341,7 @@ class Executor:
             text = (
                 f"baseline={self.baseline:.2f} | equity_now={eq_now:.2f} | gain_pct={gain_pct:.2f}% | "
                 f"realized_pnl={realized:.2f} | closed_trades={closed} | wins={wins} | losses={losses} | "
-                f"winrate={(100*wins/closed):.1f}% " +
-                (f"| PF={pf:.2f}" if pf is not None else "")
+                f"winrate={(100*wins/closed):.1f}% " + (f"| PF={pf:.2f}" if pf is not None else "")
             ) if closed > 0 else (
                 f"baseline={self.baseline:.2f} | equity_now={eq_now:.2f} | gain_pct={gain_pct:.2f}% | realized_pnl={realized:.2f} | closed_trades=0"
             )
@@ -317,7 +359,7 @@ class Executor:
                 "closed_trades": int(closed),
                 "wins": int(wins),
                 "losses": int(losses),
-                "winrate_pct": float(100*wins/closed) if closed > 0 else None,
+                "winrate_pct": float(100 * wins / closed) if closed > 0 else None,
                 "profit_factor": float(pf) if pf is not None else None,
                 "symbols": list(self.cfg.symbols),
                 "strategy": {
