@@ -8,7 +8,6 @@ from core.config import load_config
 from core.utils import import_from_path
 from adapters.broker import Broker
 from exec.execution import Executor
-from logs.csv_logger import CSVLogger
 from core.logging import get_logger
 
 PKG_DIR = Path(__file__).resolve().parent
@@ -64,8 +63,7 @@ def main() -> None:
     strategy = Strat(**cfg.strategy.params, ml_model=ml)
 
     # Executor
-    csv_logger = CSVLogger()
-    ex = Executor(cfg, broker, strategy, ml_model=ml, logger=csv_logger)
+    ex = Executor(cfg, broker, strategy, ml_model=ml)
     ex.start_session(datetime.now(timezone.utc), broker.account_equity())
     log.info("Live engine up.")
 

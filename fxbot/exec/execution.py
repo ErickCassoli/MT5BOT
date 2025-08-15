@@ -4,7 +4,6 @@ import math
 from core.types import Side
 from core.utils import atr, donchian, adx, ema
 from adapters.broker import Broker
-from logs.csv_logger import CSVLogger
 from logs.json_summary import JSONSummary
 from core.logging import get_logger
 
@@ -46,7 +45,7 @@ def _decimals_from_step(step: float) -> int:
 
 
 class Executor:
-    def __init__(self, cfg, broker: Broker, strategy, ml_model=None, logger: CSVLogger | None = None):
+    def __init__(self, cfg, broker: Broker, strategy, ml_model=None):
         self.cfg = cfg
         self.broker = broker
         self.strategy = strategy
@@ -56,7 +55,6 @@ class Executor:
         self.baseline = None
         self.last_signal_ts = {s: None for s in cfg.symbols}
         self.verbose = bool(getattr(cfg, "log_every_bar", True))
-        self.logger = logger or CSVLogger()
         self._summary_done = False
         self.json_summary = JSONSummary()
 
@@ -66,8 +64,9 @@ class Executor:
         self.session_end = now_utc + timedelta(hours=self.cfg.session.hours)
         self.baseline = baseline_equity
         if self.verbose:
-            log.info(f"[SESSION] start={self.session_start} end={self.session_end} baseline={self.baseline}")
-        self.logger.start(self.session_start, self.baseline, self.strategy.__class__.__name__)
+            log.info(
+                f"[SESSION] start={self.session_start} end={self.session_end} baseline={self.baseline}"
+            )
         self.json_summary.start(self.session_start)
 
     def equity_gain_pct(self):
@@ -199,7 +198,11 @@ class Executor:
             side_match = (pos_is_buy and sig.side == Side.BUY) or ((not pos_is_buy) and sig.side == Side.SELL)
             price_now = t.bid if pos_is_buy else t.ask
             profit = (price_now - pos.price_open) if pos_is_buy else (pos.price_open - price_now)
-            r_val = abs(pos.price_open - (pos.sl or pos.price_open)) if getattr(pos, "sl", 0) > 0 else sig.atr * self.cfg.risk.atr_mult_sl
+            r_val = (
+                abs(pos.price_open - (pos.sl or pos.price_open))
+                if getattr(pos, "sl", 0) > 0
+                else sig.atr * self.cfg.risk.atr_mult_sl
+            )
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
@@ -211,17 +214,16 @@ class Executor:
 
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
 
-        strat_name = sig.meta.get("strategy") if sig.meta and "strategy" in sig.meta else self.strategy.__class__.__name__
-        self.logger.log_signal(
-            symbol=symbol,
-            side=sig.side.value,
-            atr=sig.atr,
-            conf=sig.confidence,
-            dist_up=sig.meta.get("dist_up") if sig.meta else None,
-            dist_low=sig.meta.get("dist_low") if sig.meta else None,
-            near_thr=sig.meta.get("near_thr") if sig.meta else None,
-            adx_h1=sig.meta.get("adx_h1") if sig.meta else None,
-            strategy=strat_name,
+        strat_name = (
+            sig.meta.get("strategy") if sig.meta and "strategy" in sig.meta else self.strategy.__class__.__name__
+        )
+        log.info(
+            f"[{symbol}] signal side={sig.side.value} atr={sig.atr:.6f} conf={sig.confidence:.3f} "
+            f"dist_up={sig.meta.get('dist_up') if sig.meta else None} "
+            f"dist_low={sig.meta.get('dist_low') if sig.meta else None} "
+            f"near_thr={sig.meta.get('near_thr') if sig.meta else None} "
+            f"adx_h1={sig.meta.get('adx_h1') if sig.meta else None} "
+            f"strategy={strat_name} params={self.cfg.strategy.params}"
         )
 
         return sig, risk_now, strat_name
@@ -240,8 +242,10 @@ class Executor:
         comment = getattr(r, "comment", "")
         ticket = getattr(r, "order", None)
 
-        self.logger.log_order(
-            symbol, sig.side.value, req.volume, req.price, req.sl, req.tp, retcode, comment, ticket, strategy=strat_name
+        log.info(
+            f"[{symbol}] order side={sig.side.value} vol={req.volume} price={req.price} "
+            f"sl={req.sl} tp={req.tp} retcode={retcode} comment={comment} "
+            f"ticket={ticket} strategy={strat_name} params={self.cfg.strategy.params}"
         )
 
         if retcode is not None:
@@ -301,7 +305,9 @@ class Executor:
 
                 if vol_q >= vol_min and vol_q <= p.volume - step + 1e-12:
                     self.broker.close_position(p.ticket, vol_q)
-                    self.logger.log_partial(p.symbol, p.ticket, vol_q)
+                    log.info(
+                        f"[{p.symbol}] partial_close ticket={p.ticket} volume={vol_q}"
+                    )
 
             # ---- Trailing + Break-even ----
             new_sl = p.sl
@@ -314,7 +320,9 @@ class Executor:
                 pt = self.broker.get_point(p.symbol)
                 if abs((new_sl or 0) - (p.sl or 0)) > pt * 2:
                     self.broker.modify_sltp(p.ticket, new_sl, p.tp)
-                    self.logger.log_sltp(p.symbol, p.ticket, new_sl, p.tp)
+                    log.info(
+                        f"[{p.symbol}] sltp_update ticket={p.ticket} sl={new_sl} tp={p.tp}"
+                    )
 
     # -------- resumo ----------
     def maybe_summary_once(self):
@@ -347,7 +355,6 @@ class Executor:
             )
             log.info("\n=== SESSION SUMMARY ===")
             log.info(text)
-            self.logger.log_summary(text, strategy=self.strategy.__class__.__name__)
 
             payload = {
                 "started_at": self.session_start.isoformat(),
