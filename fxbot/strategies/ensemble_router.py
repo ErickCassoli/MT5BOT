@@ -1,48 +1,52 @@
+# strategies/ensemble_router.py
 from __future__ import annotations
-from typing import Optional, List, Dict, Any
-import importlib
-import traceback
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 
-from core.types import Signal
-
-
-def _load_class(path: str):
-    mod, cls = path.rsplit(".", 1)
-    return getattr(importlib.import_module(f"{mod}"), cls)
-
+from core.utils import import_from_path
+from core.types import Side
 
 class EnsembleRouter:
     """
-    Agrega várias estratégias.
-    mode:
-      - "best_conf": escolhe o Signal de maior confidence
-      - "first": primeira que gerar sinal, na ordem de 'children'
-    children: lista de { class_path: "...", params: {...} }
+    Orquestra as estratégias-filhas e retorna o melhor sinal (best_conf).
+    Espera no config:
+      strategy:
+        class_path: strategies.ensemble_router.EnsembleRouter
+        params:
+          mode: "best_conf"
+          children:
+            - { class_path: "strategies.vwap_keltner.VWAPKeltner", params: {...} }
+            - ...
     """
 
-    def __init__(self, **params):
-        self.mode: str = params.get("mode", "best_conf")
-        self.children_cfg: List[Dict[str, Any]] = params.get("children", [])
-        self.strategies = []
-        for ch in self.children_cfg:
-            cls = _load_class(ch["class_path"])
-            inst = cls(**(ch.get("params", {})))
-            self.strategies.append(inst)
+    def __init__(self, mode: str = "best_conf", children: Optional[List[Dict[str, Any]]] = None, ml_model=None, **_):
+        self.mode = mode
+        self.ml_model = ml_model
+        self.children = []
+        for ch in (children or []):
+            Cls = import_from_path(ch["class_path"])
+            params = ch.get("params", {})
+            self.children.append(Cls(ml_model=ml_model, **params))
 
-    def generate_signal(self, symbol, df_e, df_r) -> Optional[Signal]:
-        best: Optional[Signal] = None
-        for s in self.strategies:
+    def _pick_best(self, signals: List[SimpleNamespace]) -> Optional[SimpleNamespace]:
+        if not signals:
+            return None
+        # maior confiança leva; empate: fica com o primeiro
+        signals = sorted(signals, key=lambda s: float(getattr(s, "confidence", 0.0)), reverse=True)
+        return signals[0]
+
+    def generate_signal(self, symbol, df_exec, df_regime):
+        sigs = []
+        for strat in self.children:
             try:
-                sig = s.generate_signal(symbol, df_e, df_r)
+                s = strat.generate_signal(symbol, df_exec, df_regime)
+                if s is not None:
+                    sigs.append(s)
             except Exception:
-                traceback.print_exc()
+                # evitar que uma falha numa filha derrube o conjunto
                 continue
-            if sig is None:
-                continue
-            sig.meta = sig.meta or {}
-            sig.meta.setdefault("strategy", s.__class__.__name__)
-            if self.mode == "first":
-                return sig
-            if (best is None) or (sig.confidence > best.confidence):
-                best = sig
-        return best
+
+        if self.mode == "best_conf":
+            return self._pick_best(sigs)
+        # fallback simples: primeira que aparecer
+        return sigs[0] if sigs else None

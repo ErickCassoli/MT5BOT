@@ -6,9 +6,8 @@ timeframe_exec: "M5"
 timeframe_regime: "H1"
 cooldown_minutes: 4
 magic: 5120812
-deviation_points: 30           # slippage um pouco maior p/ horário noturno
-log_every_bar: false           # ligue true só em debug
-log_level: "INFO"
+log_every_bar: false            # ligue true só em debug
+log_level: "INFO"               # respeitado pelo run_live/core.logging
 
 strategy:
   class_path: "strategies.ensemble_router.EnsembleRouter"
@@ -60,7 +59,13 @@ strategy:
 
 broker:
   class_path: "adapters.mt5.MT5Broker"
-  params: {}
+  params:
+    deviation: 30               # (MIGRADO) slippage; usado pelo adapters.mt5
+    # type_filling:  # deixe em branco p/ padrão FOK; ajuste só se sua corretora exigir
+    # type_time:     # deixe em branco p/ padrão GTC
+    # login:         # opcional: login p/ mt5.login()
+    # password:      # opcional
+    # server:        # opcional
 
 session:
   hours: 24
@@ -84,8 +89,8 @@ risk:
   partial_at_1r: 0.5
 
 spread:
-  hard_cap_points: 40                # EURJPY/GBPs à noite precisam disso
-  max_atr_ratio: 0.80                   # 24h: aceita spread até 0.9×ATR(M5)
+  hard_cap_points: 40                   # EURJPY/GBPs à noite precisam disso
+  max_atr_ratio: 0.80                   # 24h: aceita spread até 0.8×ATR(M5)
 
 ml_model:
   class_path: "ml.xgb_model.XGBModel"
