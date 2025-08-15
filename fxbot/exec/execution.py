@@ -141,14 +141,35 @@ class Executor:
         last = self.last_signal_ts.get(symbol)
         if last and (now - last).total_seconds() < self.cfg.cooldown_minutes * 60:
             if self.verbose:
-                log.info(f"[{symbol}] skip: cooldown")
+                left = self.cfg.cooldown_minutes * 60 - (now - last).total_seconds()
+                log.info(f"[{symbol}] skip: cooldown {left:.0f}s")
             return None
 
         sig = self.strategy.generate_signal(symbol, df_e, df_r)
 
-        thr = 0.5
+        # --- ML threshold dinâmico ---
+        # Base: threshold do modelo (se houver) ou 0.60 quando sem ML (mais conservador)
         if self.ml_model is not None:
-            thr = float(getattr(self.ml_model, "threshold", thr))
+            thr = float(getattr(self.ml_model, "threshold", 0.50))
+        else:
+            thr = 0.60
+
+        # Ajustes condicionais (spread/ADX)
+        # - endurece quando spread relativo é alto
+        spr_rel = (self.broker.get_spread_points(symbol) * self.broker.get_point(symbol)) / max(atr_now, 1e-9)
+        reasons = []
+        if spr_rel > 0.60:
+            thr += 0.03
+            reasons.append("spread_rel>0.60")
+        # - relaxa um pouco se ADX(H1) muito forte
+        adx_h1 = None
+        if sig and getattr(sig, "meta", None):
+            adx_h1 = sig.meta.get("adx_h1")
+            if adx_h1 and adx_h1 >= 25:
+                thr -= 0.02
+                reasons.append("adx_h1>=25")
+        # clamp do threshold
+        thr = max(0.40, min(0.75, thr))
 
         if sig is None:
             if self.verbose:
@@ -157,7 +178,8 @@ class Executor:
 
         if sig.confidence < thr:
             if self.verbose:
-                log.info(f"[{symbol}] skip: filtrado pelo ML p={sig.confidence:.3f} < thr={thr:.3f}")
+                rtxt = f" ({', '.join(reasons)})" if reasons else ""
+                log.info(f"[{symbol}] skip: ML gate p={sig.confidence:.3f} < thr={thr:.3f}{rtxt}")
             return None
 
         open_mine = [p for p in self.broker.positions(symbol) if p.magic == self.cfg.magic]
@@ -190,7 +212,7 @@ class Executor:
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
-                    log.info(f"[{symbol}] skip: pirâmide inválida")
+                    log.info(f"[{symbol}] skip: pirâmide inválida (R={profit/max(r_val,1e-9):.2f} side_match={side_match})")
                 return None
 
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
@@ -198,10 +220,10 @@ class Executor:
         strat_name = (
             sig.meta.get("strategy") if sig.meta and "strategy" in sig.meta else self.strategy.__class__.__name__
         )
-        # Log do sinal: apenas informações essenciais
+        # Log do sinal: essenciais + gate
         log.info(
-            f"[{symbol}] sinal {sig.side.value} atr={sig.atr:.6f} conf={sig.confidence:.3f} "
-            f"strategy={strat_name} params={self.cfg.strategy.params}"
+            f"[{symbol}] sinal {sig.side.value} atr={sig.atr:.6f} conf={sig.confidence:.3f} thr={thr:.3f} "
+            f"adx_h1={adx_h1} spread_rel={spr_rel:.2f} strategy={strat_name}"
         )
 
         return sig, risk_now, strat_name
@@ -222,8 +244,7 @@ class Executor:
 
         log.info(
             f"[{symbol}] ordem {sig.side.value} vol={req.volume} price={req.price} "
-            f"sl={req.sl} tp={req.tp} retcode={retcode} ticket={ticket} "
-            f"strategy={strat_name} params={self.cfg.strategy.params}"
+            f"sl={req.sl} tp={req.tp} retcode={retcode} ticket={ticket} strategy={strat_name}"
         )
 
         if retcode is not None:
@@ -253,6 +274,10 @@ class Executor:
 
     # -------- gestão das posições ----------
     def manage_open_positions(self):
+        # Novos parâmetros por R
+        partial_r = float(getattr(self.cfg.risk, "partial_r", 1.0))
+        trail_start_r = float(getattr(self.cfg.risk, "trail_start_r", 1.2))
+
         for p in self.broker.positions():
             if p.magic != self.cfg.magic:
                 continue
@@ -268,27 +293,25 @@ class Executor:
             price_now = t.bid if is_buy else t.ask
             profit = (price_now - p.price_open) if is_buy else (p.price_open - price_now)
 
-            # ---- Parcial em 1R (respeitando volume_min/step do símbolo) ----
+            # ---- Parcial em partial_r * R (respeitando volume_min/step) ----
             info = self.broker.symbol_info(p.symbol)
             step = float(getattr(info, "volume_step", 0.01) or 0.01)
             vol_min = float(getattr(info, "volume_min", 0.01) or 0.01)
             dec = _decimals_from_step(step)
 
-            if profit >= r_val and p.volume > vol_min:
-                vol_target = p.volume * float(self.cfg.risk.partial_at_1r)
+            if profit >= partial_r * r_val and p.volume > vol_min:
+                vol_target = p.volume * float(self.cfg.risk.partial_at_1r)  # fração da parcial definida no YAML
                 vol_q = math.floor(vol_target / step) * step
                 vol_q = max(vol_min, min(vol_q, p.volume))  # não ultrapassar o volume da posição
                 vol_q = round(vol_q, dec)
 
                 if vol_q >= vol_min and vol_q <= p.volume - step + 1e-12:
                     self.broker.close_position(p.ticket, vol_q)
-                    log.info(
-                        f"[{p.symbol}] partial_close ticket={p.ticket} volume={vol_q}"
-                    )
+                    log.info(f"[{p.symbol}] partial_close ticket={p.ticket} volume={vol_q} at≥{partial_r:.2f}R")
 
-            # ---- Trailing + Break-even ----
+            # ---- Trailing + Break-even (apenas após trail_start_r * R) ----
             new_sl = p.sl
-            if profit >= r_val:
+            if profit >= trail_start_r * r_val:
                 be = p.price_open
                 trail = float(self.cfg.risk.atr_trail_mult) * a
                 new_sl = max(be, price_now - trail) if is_buy else min(be, price_now + trail)
@@ -297,9 +320,7 @@ class Executor:
                 pt = self.broker.get_point(p.symbol)
                 if abs((new_sl or 0) - (p.sl or 0)) > pt * 2:
                     self.broker.modify_sltp(p.ticket, new_sl, p.tp)
-                    log.info(
-                        f"[{p.symbol}] sltp_update ticket={p.ticket} sl={new_sl} tp={p.tp}"
-                    )
+                    log.info(f"[{p.symbol}] sltp_update ticket={p.ticket} sl={new_sl} tp={p.tp} at≥{trail_start_r:.2f}R")
 
     # -------- resumo ----------
     def maybe_summary_once(self):

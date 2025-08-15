@@ -1,10 +1,10 @@
-# ===================== FXBOT CONFIG — 24/7 (VKBP) =====================
+# ===================== FXBOT CONFIG — 24/7 (VKBP, alta precisão) =====================
 
 symbols: ["USDJPY", "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "EURJPY"]
 
 timeframe_exec: "M5"
 timeframe_regime: "H1"
-cooldown_minutes: 4
+cooldown_minutes: 6
 magic: 5120812
 log_every_bar: false            # ligue true só em debug
 log_level: "INFO"               # respeitado pelo run_live/core.logging
@@ -18,54 +18,57 @@ strategy:
         params:
           k_ema_len: 20
           k_atr_len: 10
-          k_mult: 1.8
-          adx_thr: 14
+          k_mult: 2.0               # ↑ bandas mais largas => menos falso rompimento
+          adx_thr: 16               # H1 mais forte
           rsi_len: 14
-          rsi_trig: 50
-          near_vwap_by_atr: 0.35
+          rsi_trig: 55              # exige momentum > 55 para buy (sell simétrico < 45)
+          near_vwap_by_atr: 0.25    # pullback mais próximo da VWAP/médias
           confirm_ema20: true
           allow_break_close: true
-          min_bars: 150
+          min_bars: 180
           donchian: 16
 
       - class_path: "strategies.donchian_adx.DonchianADX"
         params:
-          donchian: 16
-          adx_thr: 18
-          ema_fast: 50
+          donchian: 20              # janela maior para breakout mais “sério”
+          adx_thr: 20               # H1 mais forte
+          ema_fast: 20
           ema_slow: 200
           allow_close_break: true
-          min_bars: 150
+          min_bars: 200
           boost_strong_adx: 5
 
       - class_path: "strategies.breakout_volume.BreakoutVolume"
         params:
-          sr_win: 24
+          sr_win: 28
           vol_lookback: 20
-          vol_mult: 1.6
+          vol_mult: 1.8
           adx_thr: 12
           allow_retest: true
-          min_bars: 200
+          min_bars: 220
+          min_break_atr: 0.10          # novo
+          retest_vol_relax: 0.90       # novo (0.9 = 90% do vol_mult na confirmação)
 
       - class_path: "strategies.scalper_rsi_bb.ScalperRSIBB"
         params:
           rsi_len: 14
-          rsi_buy: 30
-          rsi_sell: 70
+          rsi_buy: 25               # reversões mais extremas
+          rsi_sell: 75
           bb_len: 20
           bb_k: 2.0
-          max_adx_h1: 18
-          min_bars: 120
+          max_adx_h1: 16            # só em lateral mesmo
+          min_bars: 150
+#      # Para desativar o Scalper temporariamente, comente o bloco acima.
 
 broker:
   class_path: "adapters.mt5.MT5Broker"
   params:
-    deviation: 30               # (MIGRADO) slippage; usado pelo adapters.mt5
-    # type_filling:  # deixe em branco p/ padrão FOK; ajuste só se sua corretora exigir
-    # type_time:     # deixe em branco p/ padrão GTC
-    # login:         # opcional: login p/ mt5.login()
-    # password:      # opcional
-    # server:        # opcional
+    deviation: 30               # slippage tolerada; usado pelo adapters.mt5
+    # type_filling:
+    # type_time:
+    # login:
+    # password:
+    # server:
 
 session:
   hours: 24
@@ -74,26 +77,31 @@ session:
   profit_target_pct: 3.0
   loss_limit_pct: 4.0
   continue_after_target: true
-  max_concurrent_trades: 4
+  max_concurrent_trades: 3      # ↓ menos exposição simultânea
   allow_pyramiding: false
   max_stack_per_symbol: 2
   min_stack_increase_r: 0.5
   pyramiding_risk_scale: 0.5
 
 risk:
-  risk_per_trade_pct: 0.6              # 24h: mais seguro que 0.8–1.0
-  risk_per_trade_pct_after_target: 0.25
+  risk_per_trade_pct: 0.5
+  risk_per_trade_pct_after_target: 0.20
   atr_mult_sl: 1.6
-  atr_mult_tp: 3.2                      # ~2R
-  atr_trail_mult: 1.05                  # trava ganho cedo em mercados lentos
-  partial_at_1r: 0.5
+  atr_mult_tp: 3.2
+  atr_trail_mult: 1.15           # trail um pouco mais “solto”
+  partial_at_1r: 0.4             # realiza menos na parcial para deixar correr
+  partial_r: 1.0                 # (novo) R para fazer a parcial
+  trail_start_r: 1.2             # (novo) só ativa BE/trailing a partir de 1.2R
 
 spread:
-  hard_cap_points: 40                   # EURJPY/GBPs à noite precisam disso
-  max_atr_ratio: 0.80                   # 24h: aceita spread até 0.8×ATR(M5)
+  hard_cap_points: 35            # majors: corta alguns horários ruins
+  max_atr_ratio: 0.70            # spread relativo mais rígido
 
 ml_model:
   class_path: "ml.xgb_model.XGBModel"
   params:
-    path: "models/xgb_vkbp.pkl"         # deixe SEM min_prob p/ usar o thr salvo
-    # min_prob: 0.40                    # (opcional) use só se quiser mais sinais
+    path: "models/xgb_vkbp_v4.pkl"
+    # min_prob: 0.45             # opcional: força base mais conservadora; o executor já ajusta dinamicamente
+
+# Dica: se o número de sinais ficar baixo demais, os “dials” mais seguros pra soltar um pouco são (nessa ordem):
+# max_atr_ratio: 0.75, k_mult: 1.9, donchian: 18, vol_mult: 1.7.

@@ -6,8 +6,9 @@ from typing import Optional
 import pandas as pd
 
 from core.types import Side
-from core.utils import atr as _atr, adx as _adx
+from core.utils import atr as _atr, adx as _adx, ema as _ema
 from core.indicators import rsi as _rsi, vwap_session, keltner_channels
+
 
 class VWAPKeltner:
     """
@@ -15,8 +16,12 @@ class VWAPKeltner:
     Regras:
       - BUY: preço acima do VWAP e rompendo/segurando entre banda média e upper;
               ADX(H1) >= adx_thr; RSI(M5) > rsi_trig
-      - SELL: simétrico abaixo do VWAP, RSI < (100 - rsi_trig) se quiser espelhar; aqui usamos < 50
+      - SELL: simétrico abaixo do VWAP; RSI(M5) < (100 - rsi_trig) ou < 50 conforme config
       - Entrada: breakout da banda OU pullback à média/VWAP com rejeição (close volta p/ dentro)
+      - Filtros adicionais (mais seletivo):
+          * Breakout precisa de margem mínima: min_break_atr × ATR
+          * Pullback precisa de “room to run”: min_room_atr × ATR até a banda alvo
+          * (opcional) confirm_ema20: close precisa respeitar o lado da EMA20
     """
 
     def __init__(
@@ -31,20 +36,24 @@ class VWAPKeltner:
         confirm_ema20: bool = True,
         allow_break_close: bool = True,
         min_bars: int = 150,
-        donchian: int = 16,  # mantido para logs/compat
+        donchian: int = 16,  # mantido para compat/logs
+        min_break_atr: float = 0.10,   # margem mínima no breakout (em ATR)
+        min_room_atr: float = 1.20,    # espaço mínimo até a banda alvo (em ATR) p/ pullback
         ml_model=None,
         **__,
     ):
-        self.k_ema_len = k_ema_len
-        self.k_atr_len = k_atr_len
+        self.k_ema_len = int(k_ema_len)
+        self.k_atr_len = int(k_atr_len)
         self.k_mult = float(k_mult)
         self.adx_thr = int(adx_thr)
-        self.rsi_len = rsi_len
-        self.rsi_trig = rsi_trig
+        self.rsi_len = int(rsi_len)
+        self.rsi_trig = int(rsi_trig)
         self.near_vwap_by_atr = float(near_vwap_by_atr)
         self.confirm_ema20 = bool(confirm_ema20)
         self.allow_break_close = bool(allow_break_close)
         self.min_bars = int(min_bars)
+        self.min_break_atr = float(min_break_atr)
+        self.min_room_atr = float(min_room_atr)
         self.ml = ml_model
 
     def _ml_conf(self, feats: dict) -> Optional[float]:
@@ -57,7 +66,6 @@ class VWAPKeltner:
             if hasattr(self.ml, "predict_proba"):
                 X = pd.DataFrame([feats])
                 proba = self.ml.predict_proba(X)
-                # scikit-like: coluna 1 é prob de classe positiva
                 if hasattr(proba, "shape") and proba.shape[1] >= 2:
                     return float(proba[0, 1])
                 return float(proba[0])
@@ -86,21 +94,40 @@ class VWAPKeltner:
         rsi_now = float(r.iloc[-1])
 
         c0 = float(df_e["c"].iloc[-1])
+        c1 = float(df_e["c"].iloc[-2]) if len(df_e) >= 2 else c0
         vwap0 = float(vwap.iloc[-1])
         ku0, km0, kl0 = float(ku.iloc[-1]), float(km.iloc[-1]), float(kl.iloc[-1])
+        h0 = float(df_e["h"].iloc[-1])
+        l0 = float(df_e["l"].iloc[-1])
 
-        # Condições de tendência
+        # EMA20 p/ confirmação opcional
+        ema20 = float(_ema(df_e["c"], 20).iloc[-1])
+
+        # Condições de tendência/VWAP
         above_vwap = c0 > vwap0
         below_vwap = c0 < vwap0
         in_upper_band = (c0 >= km0) and (c0 <= ku0)
         in_lower_band = (c0 <= km0) and (c0 >= kl0)
         near_vwap = abs(c0 - vwap0) <= self.near_vwap_by_atr * atr_now
 
-        # Regras de entrada
-        buy_break = above_vwap and (c0 > ku0)  # breakout Keltner superior
-        buy_pull = above_vwap and in_upper_band and near_vwap  # pullback com rejeição perto da média/VWAP
-        sell_break = below_vwap and (c0 < kl0)
-        sell_pull = below_vwap and in_lower_band and near_vwap
+        # Regras de entrada “brutas”
+        buy_break_close = (c0 > ku0 + self.min_break_atr * atr_now) if self.allow_break_close else False
+        buy_break_wick  = (h0 > ku0 + self.min_break_atr * atr_now) if not self.allow_break_close else False
+        buy_break = above_vwap and (buy_break_close or buy_break_wick)
+
+        sell_break_close = (c0 < kl0 - self.min_break_atr * atr_now) if self.allow_break_close else False
+        sell_break_wick  = (l0 < kl0 - self.min_break_atr * atr_now) if not self.allow_break_close else False
+        sell_break = below_vwap and (sell_break_close or sell_break_wick)
+
+        # Pullback com rejeição simples (volta para dentro da banda média)
+        buy_pull = above_vwap and in_upper_band and near_vwap and (c1 <= km0) and (c0 > km0)
+        sell_pull = below_vwap and in_lower_band and near_vwap and (c1 >= km0) and (c0 < km0)
+
+        # “Room to run” (só para pullbacks)
+        room_buy_atr = (ku0 - c0) / max(atr_now, 1e-9)
+        room_sell_atr = (c0 - kl0) / max(atr_now, 1e-9)
+        buy_pull_ok = buy_pull and (room_buy_atr >= self.min_room_atr)
+        sell_pull_ok = sell_pull and (room_sell_atr >= self.min_room_atr)
 
         meta = {
             "strategy": "VWAPKeltner",
@@ -113,29 +140,99 @@ class VWAPKeltner:
             "k_mid": km0,
             "k_lower": kl0,
             "rsi": rsi_now,
+            "break_margin_atr": self.min_break_atr,
+            "room_atr": room_buy_atr if above_vwap else room_sell_atr,
+            "ema20": ema20,
         }
 
-        # Filtros de RSI
-        if (buy_break or buy_pull) and rsi_now > max(50, self.rsi_trig):
+        # Filtros de RSI + confirmação EMA20 (se habilitada)
+        def _ok_buy_filters() -> bool:
+            if rsi_now <= max(50, self.rsi_trig):
+                return False
+            if self.confirm_ema20 and not (c0 > ema20):
+                return False
+            return True
+
+        def _ok_sell_filters() -> bool:
+            if rsi_now >= min(50, 100 - self.rsi_trig):  # padrão mais rígido (ou use <50)
+                return False
+            if self.confirm_ema20 and not (c0 < ema20):
+                return False
+            return True
+
+        # --- BUYs ---
+        if buy_break and _ok_buy_filters():
+            break_dist_atr = (max(c0, h0) - ku0) / max(atr_now, 1e-9)
+            meta["break_dist_atr"] = break_dist_atr
+            feats = {
+                "adx_h1": adx_h1,
+                "rsi_m5": rsi_now,
+                "break_dist": break_dist_atr,
+                "room_atr": room_buy_atr,
+                "atr_now": atr_now,
+                "confirm_ema20": float(c0 > ema20),
+            }
+            conf = self._ml_conf(feats)
+            if conf is None:
+                conf = 0.64
+            return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
+
+        if buy_pull_ok and _ok_buy_filters():
             feats = {
                 "adx_h1": adx_h1,
                 "rsi_m5": rsi_now,
                 "c_kdist_up": (c0 - km0) / max(atr_now, 1e-9),
                 "near_vwap": float(near_vwap),
+                "room_atr": room_buy_atr,
                 "atr_now": atr_now,
+                "confirm_ema20": float(c0 > ema20),
             }
             conf = self._ml_conf(feats)
             if conf is None:
-                conf = 0.62  # confiança técnica padrão
+                conf = 0.62
             return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
 
-        if (sell_break or sell_pull) and rsi_now < 50:
+        # --- SELLs ---
+        if sell_break and _ok_sell_filters():
+            break_dist_atr = (kl0 - min(c0, l0)) / max(atr_now, 1e-9)
+            meta["break_dist_atr"] = break_dist_atr
             feats = {
                 "adx_h1": adx_h1,
                 "rsi_m5": rsi_now,
-                "c_kdist_low": (km0 - c0) / max(atr_now, 1e-9),
-                "near_vwap": float(near_vwap),
+                "break_dist": break_dist_atr,
+                "room_atr": room_sell_atr,
                 "atr_now": atr_now,
+                "confirm_ema20": float(c0 < ema20),
+            }
+            conf = self._ml_conf(feats)
+            if conf is None:
+                conf = 0.62
+            return SimpleNamespace(side=Side.SELL, confidence=float(conf), atr=atr_now, meta=meta)
+
+        if sell_pull_ok and _ok_sell_filters():
+            feats = {
+                # comuns
+                "adx_h1": adx_h1,
+                "rsi_m5": rsi_now,
+                "atr_now": atr_now,
+
+                # VWAP/Keltner
+                "c_kdist_up": (c0 - km0) / max(atr_now, 1e-9),
+                "c_kdist_low": (km0 - c0) / max(atr_now, 1e-9),
+                "near_vwap": float(abs(c0 - vwap0) <= self.near_vwap_by_atr * atr_now),
+                "confirm_ema20": float(c0 > km0),   # ou float(c0 > ema20) se preferir
+
+                # lado do trade
+                "room_atr": (ku0 - c0) / max(atr_now, 1e-9) if (buy_break or buy_pull) else (c0 - kl0) / max(atr_now, 1e-9),
+                "break_dist": (c0 - ku0) / max(atr_now, 1e-9) if (buy_break or buy_pull) else (kl0 - c0) / max(atr_now, 1e-9),
+
+                # não usados aqui (zerados)
+                "ema20_50": 0.0,
+                "ema50_200": 0.0,
+                "vol_ratio": 0.0,
+
+                # origem
+                "src_vk": 1.0, "src_don": 0.0, "src_bv": 0.0,
             }
             conf = self._ml_conf(feats)
             if conf is None:

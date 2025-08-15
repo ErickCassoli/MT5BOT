@@ -8,11 +8,13 @@ import pandas as pd
 from core.types import Side
 from core.utils import atr as _atr, adx as _adx, donchian as _donchian, ema as _ema
 
+
 class DonchianADX:
     """
     Trend breakout:
       - Rompimento dos últimos N (default 16) com ADX(H1) >= adx_thr
       - Filtro de médias para BUY: EMA20 > EMA50 > EMA200; SELL: inverso
+      - Exige margem mínima de rompimento: min_break_atr * ATR (fechamento ou pavio)
     Mesmas saídas (SL/TP/partial/trailing) geridas fora.
     """
 
@@ -25,6 +27,7 @@ class DonchianADX:
         ema_slow: int = 200,
         allow_close_break: bool = True,
         min_bars: int = 150,
+        min_break_atr: float = 0.10,  # margem mínima além da borda (em ATR)
         ml_model=None,
         **__,
     ):
@@ -35,6 +38,7 @@ class DonchianADX:
         self.ema_s = int(ema_slow)
         self.allow_close_break = bool(allow_close_break)
         self.min_bars = int(min_bars)
+        self.min_break_atr = float(min_break_atr)
         self.ml = ml_model
 
     def _ml_conf(self, feats: dict) -> Optional[float]:
@@ -71,7 +75,10 @@ class DonchianADX:
 
         up, lo = _donchian(df_e["h"], df_e["l"], self.n)
         up0, lo0 = float(up.iloc[-1]), float(lo.iloc[-1])
+
         c0 = float(df_e["c"].iloc[-1])
+        h0 = float(df_e["h"].iloc[-1])
+        l0 = float(df_e["l"].iloc[-1])
 
         ema20 = float(_ema(df_e["c"], self.ema_f).iloc[-1])
         ema50 = float(_ema(df_e["c"], self.ema_m).iloc[-1])
@@ -80,38 +87,83 @@ class DonchianADX:
         buy_trend = (ema20 > ema50) and (ema50 > ema200)
         sell_trend = (ema20 < ema50) and (ema50 < ema200)
 
+        # Margem de rompimento requerida (em preço)
+        margin = self.min_break_atr * max(atr_now, 1e-9)
+
+        # Meta para logs/diagnóstico
         meta = {
             "strategy": "DonchianADX",
             "adx_h1": adx_h1,
             "dist_up": max(0.0, up0 - c0),
             "dist_low": max(0.0, c0 - lo0),
-            "ema20": ema20, "ema50": ema50, "ema200": ema200,
+            "ema20": ema20,
+            "ema50": ema50,
+            "ema200": ema200,
+            "break_margin_atr": self.min_break_atr,
         }
 
-        if buy_trend and c0 >= up0:
-            feats = {
-                "adx_h1": adx_h1,
-                "ema20_50": ema20 - ema50,
-                "ema50_200": ema50 - ema200,
-                "break_dist": (c0 - up0) / max(atr_now, 1e-9),
-                "atr_now": atr_now,
-            }
-            conf = self._ml_conf(feats)
-            if conf is None:
-                conf = 0.65
-            return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
+        # --- BUY breakout ---
+        if buy_trend:
+            if self.allow_close_break:
+                # precisa FECHAR acima da borda com margem
+                break_ok = (c0 > up0) and ((c0 - up0) >= margin)
+                break_dist_atr = (c0 - up0) / max(atr_now, 1e-9)
+            else:
+                # aceita PAVIO acima com a mesma margem
+                break_ok = (h0 > up0) and ((h0 - up0) >= margin)
+                break_dist_atr = (h0 - up0) / max(atr_now, 1e-9)
 
-        if sell_trend and c0 <= lo0:
-            feats = {
-                "adx_h1": adx_h1,
-                "ema50_20": ema50 - ema20,
-                "ema200_50": ema200 - ema50,
-                "break_dist": (lo0 - c0) / max(atr_now, 1e-9),
-                "atr_now": atr_now,
-            }
-            conf = self._ml_conf(feats)
-            if conf is None:
-                conf = 0.63
-            return SimpleNamespace(side=Side.SELL, confidence=float(conf), atr=atr_now, meta=meta)
+            if break_ok:
+                feats = {
+                    "adx_h1": adx_h1,
+                    "ema20_50": ema20 - ema50,
+                    "ema50_200": ema50 - ema200,
+                    "break_dist": break_dist_atr,
+                    "atr_now": atr_now,
+                }
+                conf = self._ml_conf(feats)
+                if conf is None:
+                    conf = 0.65
+                meta["break_dist_atr"] = break_dist_atr
+                return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
+
+        # --- SELL breakout ---
+        if sell_trend:
+            if self.allow_close_break:
+                break_ok = (c0 < lo0) and ((lo0 - c0) >= margin)
+                break_dist_atr = (lo0 - c0) / max(atr_now, 1e-9)
+            else:
+                break_ok = (l0 < lo0) and ((lo0 - l0) >= margin)
+                break_dist_atr = (lo0 - l0) / max(atr_now, 1e-9)
+
+            if break_ok:
+                feats = {
+                    "adx_h1": adx_h1,
+                    "rsi_m5": 0.0,
+                    "atr_now": atr_now,
+
+                    "c_kdist_up": 0.0,
+                    "c_kdist_low": 0.0,
+                    "near_vwap": 0.0,
+                    "confirm_ema20": 0.0,
+
+                    "room_atr": 0.0,
+                    "break_dist": (c0 - up0) / max(atr_now, 1e-9) if (buy_trend and c0 >= up0)
+                                else (lo0 - c0) / max(atr_now, 1e-9),
+
+                    "ema20_50": (ema20 - ema50),
+                    "ema50_200": (ema50 - ema200),
+
+                    "vol_ratio": 0.0,
+
+                    "src_vk": 0.0, "src_don": 1.0, "src_bv": 0.0,
+                }
+
+
+                conf = self._ml_conf(feats)
+                if conf is None:
+                    conf = 0.63
+                meta["break_dist_atr"] = break_dist_atr
+                return SimpleNamespace(side=Side.SELL, confidence=float(conf), atr=atr_now, meta=meta)
 
         return None
