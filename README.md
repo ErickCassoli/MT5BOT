@@ -4,7 +4,7 @@ Framework modular para trading em Forex com **MetaTrader 5** (conta demo ou real
 - Estratégias plugáveis (trend, breakout, scalper, ensemble).
 - Filtros de **Machine Learning** (XGBoost já integrado).
 - Gestão de risco (ATR SL/TP, parcial a 1R, trailing).
-- Logs estruturados (CSV + JSON) e sessão 24/7.
+- Logs estruturados (JSON) e sessão 24/7.
 
 > ⚠️ Aviso: Trading envolve risco. Use primeiro em **conta demo**.
 
@@ -15,7 +15,7 @@ Framework modular para trading em Forex com **MetaTrader 5** (conta demo ou real
 - **Estratégias**: VWAP+Keltner, Donchian+ADX, Breakout+Volume, Scalper RSI+Bollinger, Ensemble.
 - **MT5 Adapter**: envio de ordens, SL/TP, trailing, histórico e posições.
 - **ML**: builder de dataset e treino de XGBoost; filtro por probabilidade.
-- **Observabilidade**: `logs/trades.csv` (ordens/sinais) e `logs/session.json` (resumo).
+- **Observabilidade**: `logs/fxbot.log` (sinais/ordens com estratégia e parâmetros) e `logs/session.json` (resumo).
 
 ---
 
@@ -63,7 +63,7 @@ Live engine up.
 
 **Logs** serão gravados em:
 
-* `logs/trades.csv` – cada sinal/ordem, retcodes, SL/TP.
+* `logs/fxbot.log` – cada sinal/ordem (com estratégia e parâmetros), retcodes, SL/TP.
 * `logs/session.json` – resumo final (P\&L, winrate, PF).
 
 ---
