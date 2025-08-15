@@ -6,7 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
-fxbot/logs/session_*.csv
+fxbot/logs
+fxbot/datasets
+ffxbot/models
 
 # Distribution / packaging
 .Python
