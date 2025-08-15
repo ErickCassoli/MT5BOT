@@ -9,7 +9,7 @@ __pycache__/
 fxbot/config.yaml
 
 fxbot/datasets/
-ffxbot/models/
+fxbot/models/
 
 # Distribution / packaging
 .Python
