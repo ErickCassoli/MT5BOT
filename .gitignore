@@ -6,6 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
+fxbot/config.yaml
+
 fxbot/logs/
 fxbot/datasets/
 ffxbot/models/
