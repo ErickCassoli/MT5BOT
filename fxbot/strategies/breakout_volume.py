@@ -13,25 +13,17 @@ class BreakoutVolume:
     """
     Expansão com volume (M5), regime por ADX(H1).
 
-    Regras principais:
-      - Rompimento de suporte/resistência calculado nos últimos N candles (sr_win),
-        com VOLUME atual >= vol_mult * média(vol_lookback).
-      - Exige margem mínima de rompimento: min_break_atr * ATR (por FECHAMENTO).
-        (Facilmente adaptável para pavio se quiser no futuro.)
-      - Permite reteste: candle anterior já fechou além do SR + margem e o candle atual confirma
-        (close > close[-1] no caso de rompimento pra cima; volume pode ser levemente relaxado).
+    Regras:
+      - Rompe SR calculado nos últimos N candles (sr_win), COM MARGEM de min_break_atr * ATR.
+      - Volume atual deve ser >= vol_mult * média(vol_lookback).
+      - (Opcional) Reteste: candle anterior já fechou além do SR+margem e o atual confirma;
+        no reteste o volume pode ser levemente relaxado (retest_vol_relax).
 
-    Parâmetros:
-      sr_win: janela para SR (24–32 recomendado)
-      vol_lookback: janela da média de volume
-      vol_mult: fator mínimo do volume vs. média (1.6–2.0 recomendado)
-      adx_thr: filtro de regime H1
-      allow_retest: habilita a lógica de reteste
-      min_bars: mínimo de barras no M5
-      min_break_atr: margem mínima do rompimento em ATR (default 0.10)
-      retest_vol_relax: relaxamento do volume na confirmação do reteste (default 0.90)
+    Parâmetros típicos:
+      sr_win=24~32, vol_lookback=20, vol_mult=1.6~2.0, adx_thr=12~18,
+      min_break_atr=0.10, retest_vol_relax=0.90, min_bars>=200
 
-    Saídas (SL/TP/partial/trailing) são geridas pelo Executor/RiskManager.
+    Saídas (SL/TP/partial/trailing) são geridas no Executor/RiskManager.
     """
 
     def __init__(
@@ -57,11 +49,11 @@ class BreakoutVolume:
         self.retest_vol_relax = float(retest_vol_relax)
         self.ml = ml_model
 
+    # -------- ML helper --------
     def _ml_conf(self, feats: dict) -> Optional[float]:
         if self.ml is None:
             return None
         try:
-            import pandas as pd
             if hasattr(self.ml, "predict_proba_dict"):
                 return float(self.ml.predict_proba_dict(feats))
             if hasattr(self.ml, "predict_proba"):
@@ -76,6 +68,43 @@ class BreakoutVolume:
             return None
         return None
 
+    # -------- Feature builder (v5 schema) --------
+    @staticmethod
+    def _feats_v5(side: Side, atr_now: float, break_dist_atr: float, vol_ratio: float) -> dict:
+        """Monta vetor de features v5 padronizado para Breakout+Volume."""
+        return {
+            # básicos
+            "adx_h1": 0.0,          # preenchido no call site (placeholder)
+            "rsi_m5": 0.0,
+            "atr_now": atr_now,
+
+            # VWAP/Keltner (não usados aqui)
+            "c_kdist_up": 0.0,
+            "c_kdist_low": 0.0,
+            "near_vwap": 0.0,
+            "confirm_ema20": 0.0,
+
+            # espaço e distância de rompimento
+            "room_atr": 0.0,
+            "break_dist": break_dist_atr,  # (c - sr)/ATR com sinal correto
+
+            # EMAs (não usados nesta estratégia)
+            "ema20_50": 0.0,
+            "ema50_200": 0.0,
+
+            # volume/BB
+            "vol_ratio": vol_ratio,
+            "bb_z": 0.0,
+            "bb_width": 0.0,
+
+            # origem (one-hot)
+            "src_vk": 0.0,
+            "src_don": 0.0,
+            "src_bv": 1.0,
+            "src_scalper": 0.0,
+        }
+
+    # -------- Core --------
     def generate_signal(self, symbol: str, df_e: pd.DataFrame, df_r: pd.DataFrame):
         if len(df_e) < max(self.min_bars, self.sr_win + 5) or len(df_r) < 50:
             return None
@@ -93,13 +122,13 @@ class BreakoutVolume:
 
         atr_now = float(_atr(h, l, c, 14).iloc[-1])
 
-        # SR calculado sobre a janela completa anterior (exclui o candle atual)
+        # SR sobre janela COMPLETA anterior ao candle atual
         sr_high_series = h.rolling(self.sr_win, min_periods=self.sr_win).max()
-        sr_low_series = l.rolling(self.sr_win, min_periods=self.sr_win).min()
+        sr_low_series  = l.rolling(self.sr_win, min_periods=self.sr_win).min()
         sr_high = float(sr_high_series.iloc[-2])
-        sr_low = float(sr_low_series.iloc[-2])
+        sr_low  = float(sr_low_series.iloc[-2])
 
-        # Volume: média e atual
+        # Volume
         vol_avg = float(v.rolling(self.vol_lookback, min_periods=self.vol_lookback).mean().iloc[-1])
         vol_now = float(v.iloc[-1])
         vol_ratio = vol_now / max(vol_avg, 1e-9)
@@ -107,12 +136,12 @@ class BreakoutVolume:
         c0 = float(c.iloc[-1])
         c1 = float(c.iloc[-2]) if len(c) >= 2 else c0
 
-        # Margem de rompimento em preço
-        margin = self.min_break_atr * max(atr_now, 1e-9)
+        # Margem mínima em preço
+        margin_px = self.min_break_atr * max(atr_now, 1e-9)
 
-        # --- Rompimento por FECHAMENTO com margem + volume forte ---
-        broke_up = (c0 > sr_high + margin) and (vol_ratio >= self.vol_mult)
-        broke_down = (c0 < sr_low - margin) and (vol_ratio >= self.vol_mult)
+        # Rompimento por FECHAMENTO com margem + volume forte
+        broke_up   = (c0 > sr_high + margin_px) and (vol_ratio >= self.vol_mult)
+        broke_down = (c0 < sr_low  - margin_px) and (vol_ratio >= self.vol_mult)
 
         meta = {
             "strategy": "BreakoutVolume",
@@ -125,77 +154,52 @@ class BreakoutVolume:
             "break_margin_atr": self.min_break_atr,
         }
 
+        # --- BUY breakout ---
         if broke_up:
-            feats = {
-                "adx_h1": adx_h1,
-                "vol_ratio": vol_ratio,
-                "break_dist": (c0 - sr_high) / max(atr_now, 1e-9),
-                "atr_now": atr_now,
-            }
-            meta["break_dist_atr"] = feats["break_dist"]
+            break_dist_atr = (c0 - sr_high) / max(atr_now, 1e-9)
+            feats = self._feats_v5(Side.BUY, atr_now, break_dist_atr, vol_ratio)
+            feats["adx_h1"] = adx_h1
+            meta["break_dist_atr"] = break_dist_atr
+
             conf = self._ml_conf(feats)
             if conf is None:
                 conf = 0.64
             return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
 
+        # --- SELL breakout ---
         if broke_down:
-            feats = {
-                "adx_h1": adx_h1,
-                "vol_ratio": vol_ratio,
-                "break_dist": (sr_low - c0) / max(atr_now, 1e-9),
-                "atr_now": atr_now,
-            }
-            meta["break_dist_atr"] = feats["break_dist"]
+            break_dist_atr = (sr_low - c0) / max(atr_now, 1e-9)
+            feats = self._feats_v5(Side.SELL, atr_now, break_dist_atr, vol_ratio)
+            feats["adx_h1"] = adx_h1
+            meta["break_dist_atr"] = break_dist_atr
+
             conf = self._ml_conf(feats)
             if conf is None:
                 conf = 0.62
             return SimpleNamespace(side=Side.SELL, confidence=float(conf), atr=atr_now, meta=meta)
 
-        # --- Retest (opcional): candle anterior já fechou além do SR + margem e o atual confirma ---
+        # --- Reteste (opcional) ---
         if self.allow_retest and len(df_e) >= self.sr_win + 3:
-            # BUY retest: close[-1] > sr_high + margin e close[0] > close[-1], com volume ainda forte (pode relaxar um pouco)
-            if (c1 > sr_high + margin) and (c0 > c1) and (vol_ratio >= self.vol_mult * self.retest_vol_relax):
-                feats = {
-                    "adx_h1": adx_h1,
-                    "retest": 1.0,
-                    "vol_ratio": vol_ratio,
-                    "atr_now": atr_now,
-                }
+            # BUY retest: candle anterior já fechou além de sr_high+margin e o atual confirma (close > close[-1])
+            if (c1 > sr_high + margin_px) and (c0 > c1) and (vol_ratio >= self.vol_mult * self.retest_vol_relax):
+                feats = self._feats_v5(Side.BUY, atr_now, break_dist_atr=0.0, vol_ratio=vol_ratio)
+                feats["adx_h1"] = adx_h1
+                meta["retest"] = True
+
                 conf = self._ml_conf(feats)
                 if conf is None:
                     conf = 0.60
-                meta["retest"] = True
                 return SimpleNamespace(side=Side.BUY, confidence=float(conf), atr=atr_now, meta=meta)
 
-            # SELL retest: close[-1] < sr_low - margin e close[0] < close[-1], com volume ainda forte (pode relaxar um pouco)
-            if (c1 < sr_low - margin) and (c0 < c1) and (vol_ratio >= self.vol_mult * self.retest_vol_relax):
-                feats = {
-                    "adx_h1": adx_h1,
-                    "rsi_m5": 0.0,
-                    "atr_now": atr_now,
-
-                    "c_kdist_up": 0.0,
-                    "c_kdist_low": 0.0,
-                    "near_vwap": 0.0,
-                    "confirm_ema20": 0.0,
-
-                    "room_atr": 0.0,
-                    "break_dist": (c0 - sr_high) / max(atr_now, 1e-9) if broke_up
-                                else (sr_low - c0) / max(atr_now, 1e-9),
-
-                    "ema20_50": 0.0,
-                    "ema50_200": 0.0,
-
-                    "vol_ratio": (vol_now / max(vol_avg, 1e-9)) if vol_avg > 0 else 0.0,
-
-                    "src_vk": 0.0, "src_don": 0.0, "src_bv": 1.0,
-                }
-
+            # SELL retest: candle anterior já fechou além de sr_low-margin e o atual confirma (close < close[-1])
+            if (c1 < sr_low - margin_px) and (c0 < c1) and (vol_ratio >= self.vol_mult * self.retest_vol_relax):
+                feats = self._feats_v5(Side.SELL, atr_now, break_dist_atr=0.0, vol_ratio=vol_ratio)
+                feats["adx_h1"] = adx_h1
+                meta["retest"] = True
 
                 conf = self._ml_conf(feats)
                 if conf is None:
                     conf = 0.60
-                meta["retest"] = True
                 return SimpleNamespace(side=Side.SELL, confidence=float(conf), atr=atr_now, meta=meta)
 
         return None

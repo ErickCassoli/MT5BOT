@@ -6,48 +6,49 @@ timeframe_exec: "M5"
 timeframe_regime: "H1"
 cooldown_minutes: 6
 magic: 5120812
-log_every_bar: false            # ligue true só em debug
-log_level: "INFO"               # respeitado pelo run_live/core.logging
+log_level: "DEBUG"     # pra ver os debug logs
+log_every_bar: true    # Executor fica “verboso”
 
 strategy:
   class_path: "strategies.ensemble_router.EnsembleRouter"
   params:
-    mode: "best_conf"   # ou "first"
+    mode: "best_conf"
     children:
       - class_path: "strategies.vwap_keltner.VWAPKeltner"
         params:
           k_ema_len: 20
           k_atr_len: 10
-          k_mult: 2.0               # ↑ bandas mais largas => menos falso rompimento
-          adx_thr: 16               # H1 mais forte
+          k_mult: 1.6          # de 1.8 -> 1.6 (banda um pouco mais estreita = facilita breakout)
+          adx_thr: 13          # de 14 -> 13
           rsi_len: 14
-          rsi_trig: 55              # exige momentum > 55 para buy (sell simétrico < 45)
-          near_vwap_by_atr: 0.25    # pullback mais próximo da VWAP/médias
+          rsi_trig: 48         # de 50 -> 48 (sem ficar permissivo demais)
+          near_vwap_by_atr: 0.45  # de 0.35 -> 0.45 (pullback menos “colado”)
           confirm_ema20: true
           allow_break_close: true
-          min_bars: 180
+          min_bars: 150
           donchian: 16
 
       - class_path: "strategies.donchian_adx.DonchianADX"
         params:
-          donchian: 20              # janela maior para breakout mais “sério”
-          adx_thr: 20               # H1 mais forte
+          donchian: 14         # de 16 -> 14 (rompimentos um pouco mais frequentes)
+          adx_thr: 16          # de 18 -> 16
           ema_fast: 20
+          ema_mid: 50
           ema_slow: 200
           allow_close_break: true
-          min_bars: 200
+          min_bars: 150
           boost_strong_adx: 5
+
 
       - class_path: "strategies.breakout_volume.BreakoutVolume"
         params:
-          sr_win: 28
+          sr_win: 24
           vol_lookback: 20
-          vol_mult: 1.8
+          vol_mult: 1.4        # de 1.6 -> 1.4 (tick_volume do FX é “raro” fora do pico)
           adx_thr: 12
           allow_retest: true
-          min_bars: 220
-          min_break_atr: 0.10          # novo
-          retest_vol_relax: 0.90       # novo (0.9 = 90% do vol_mult na confirmação)
+          min_bars: 200
+
 
       - class_path: "strategies.scalper_rsi_bb.ScalperRSIBB"
         params:
@@ -100,7 +101,7 @@ spread:
 ml_model:
   class_path: "ml.xgb_model.XGBModel"
   params:
-    path: "models/xgb_vkbp_v4.pkl"
+    path: "models/xgb_v5_super.pkl"
     # min_prob: 0.45             # opcional: força base mais conservadora; o executor já ajusta dinamicamente
 
 # Dica: se o número de sinais ficar baixo demais, os “dials” mais seguros pra soltar um pouco são (nessa ordem):
