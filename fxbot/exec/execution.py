@@ -141,8 +141,7 @@ class Executor:
         last = self.last_signal_ts.get(symbol)
         if last and (now - last).total_seconds() < self.cfg.cooldown_minutes * 60:
             if self.verbose:
-                left = self.cfg.cooldown_minutes * 60 - (now - last).total_seconds()
-                log.info(f"[{symbol}] skip: cooldown {left:.0f}s")
+                log.info(f"[{symbol}] skip: cooldown")
             return None
 
         sig = self.strategy.generate_signal(symbol, df_e, df_r)
@@ -153,27 +152,12 @@ class Executor:
 
         if sig is None:
             if self.verbose:
-                if "donchian" in self.cfg.strategy.params:
-                    win = self.cfg.strategy.params.get("donchian", 20)
-                    up, lo = donchian(df_e["h"], df_e["l"], win)
-                    c0 = df_e["c"].iloc[-1]
-                    log.debug(
-                        f"[{symbol}] no strategy signal | dist_up={(up.iloc[-1]-c0):.6f} | "
-                        f"dist_low={(c0-lo.iloc[-1]):.6f} | thr={thr:.3f}"
-                    )
-                else:
-                    near_ratio = self.cfg.strategy.params.get(
-                        "near_by_atr_ratio", self.cfg.strategy.params.get("near_vwap_by_atr", 0.30)
-                    )
-                    log.debug(f"[{symbol}] no strategy signal | atr={atr_now:.6f} | near_ratio={near_ratio:.2f} | thr={thr:.3f}")
+                log.debug(f"[{symbol}] sem sinal da estratégia")
             return None
 
         if sig.confidence < thr:
             if self.verbose:
-                log.info(
-                    f"[{symbol}] ML-filtered | p={sig.confidence:.3f} < thr={thr:.3f} | "
-                    f"atr={sig.atr:.6f} | adx_h1={sig.meta.get('adx_h1') if sig.meta else None}"
-                )
+                log.info(f"[{symbol}] skip: filtrado pelo ML p={sig.confidence:.3f} < thr={thr:.3f}")
             return None
 
         open_mine = [p for p in self.broker.positions(symbol) if p.magic == self.cfg.magic]
@@ -182,12 +166,12 @@ class Executor:
         if open_mine:
             if not getattr(self.cfg.session, "allow_pyramiding", False):
                 if self.verbose:
-                    log.info(f"[{symbol}] skip: already have position")
+                    log.info(f"[{symbol}] skip: já existe posição")
                 return None
 
             if len(open_mine) >= getattr(self.cfg.session, "max_stack_per_symbol", 1):
                 if self.verbose:
-                    log.info(f"[{symbol}] skip: max stack per symbol")
+                    log.info(f"[{symbol}] skip: máximo empilhamento")
                 return None
 
             pos = open_mine[0]
@@ -206,10 +190,7 @@ class Executor:
 
             if (profit < self.cfg.session.min_stack_increase_r * r_val) or (not side_match):
                 if self.verbose:
-                    log.info(
-                        f"[{symbol}] skip: no pyramid (profit={profit:.6f} | R={profit/max(r_val,1e-9):.2f} | "
-                        f"side_mismatch={not side_match})"
-                    )
+                    log.info(f"[{symbol}] skip: pirâmide inválida")
                 return None
 
             risk_now *= float(self.cfg.session.pyramiding_risk_scale)
@@ -217,12 +198,9 @@ class Executor:
         strat_name = (
             sig.meta.get("strategy") if sig.meta and "strategy" in sig.meta else self.strategy.__class__.__name__
         )
+        # Log do sinal: apenas informações essenciais
         log.info(
-            f"[{symbol}] signal side={sig.side.value} atr={sig.atr:.6f} conf={sig.confidence:.3f} "
-            f"dist_up={sig.meta.get('dist_up') if sig.meta else None} "
-            f"dist_low={sig.meta.get('dist_low') if sig.meta else None} "
-            f"near_thr={sig.meta.get('near_thr') if sig.meta else None} "
-            f"adx_h1={sig.meta.get('adx_h1') if sig.meta else None} "
+            f"[{symbol}] sinal {sig.side.value} atr={sig.atr:.6f} conf={sig.confidence:.3f} "
             f"strategy={strat_name} params={self.cfg.strategy.params}"
         )
 
@@ -243,16 +221,15 @@ class Executor:
         ticket = getattr(r, "order", None)
 
         log.info(
-            f"[{symbol}] order side={sig.side.value} vol={req.volume} price={req.price} "
-            f"sl={req.sl} tp={req.tp} retcode={retcode} comment={comment} "
-            f"ticket={ticket} strategy={strat_name} params={self.cfg.strategy.params}"
+            f"[{symbol}] ordem {sig.side.value} vol={req.volume} price={req.price} "
+            f"sl={req.sl} tp={req.tp} retcode={retcode} ticket={ticket} "
+            f"strategy={strat_name} params={self.cfg.strategy.params}"
         )
 
         if retcode is not None:
-            log.info(f"[{symbol}] order ret={retcode} {comment}")
             self.last_signal_ts[symbol] = datetime.now(timezone.utc)
         else:
-            log.error(f"[{symbol}] order error: {comment}")
+            log.error(f"[{symbol}] erro ao enviar ordem: {comment}")
 
     # -------- por símbolo ----------
     def step_symbol(self, symbol: str):
