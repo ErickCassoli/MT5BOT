@@ -6,8 +6,8 @@ timeframe_exec: "M5"
 timeframe_regime: "H1"
 cooldown_minutes: 6
 magic: 5120812
-log_level: "DEBUG"         # logs detalhados
-log_every_bar: true        # executor verboso a cada barra
+log_level: "INFO"         # logs detalhados
+log_every_bar: false        # executor verboso a cada barra
 
 strategy:
   class_path: "strategies.ensemble_router.EnsembleRouter"
@@ -100,11 +100,11 @@ spread:
   hard_cap_points: 35
   max_atr_ratio: 0.70
 
-# ml_model:
-#   class_path: "ml.xgb_model.XGBModel"
-#   params:
-#     path: "models/xgb_v5_super.pkl"
-#     min_prob: 0.30             # opcional: força base mais conservadora; o executor já ajusta dinamicamente
+ml_model:
+  class_path: "ml.xgb_model.XGBModel"
+  params:
+    path: "models/xgb_v5_super.pkl"
+    min_prob: 0.30             # opcional: força base mais conservadora; o executor já ajusta dinamicamente
 
 # Dica: se o número de sinais ficar baixo demais, os “dials” mais seguros pra soltar um pouco são (nessa ordem):
 # max_atr_ratio: 0.75, k_mult: 1.9, donchian: 18, vol_mult: 1.7.
