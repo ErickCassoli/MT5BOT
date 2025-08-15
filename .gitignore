@@ -8,7 +8,6 @@ __pycache__/
 
 fxbot/config.yaml
 
-fxbot/logs/
 fxbot/datasets/
 ffxbot/models/
 
