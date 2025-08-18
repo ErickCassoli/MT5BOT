@@ -13,7 +13,7 @@ from core.indicators import rsi as _rsi, bollinger as _bb
 class ScalperRSIBB:
     """
     Reversão curta para mercado lateral (M5):
-      - Regime: ADX(H1) <= max_adx_h1 (default 18)
+      - Regime: ADX(H1) <= max_adx_h1 (default 14)
       - BUY:  RSI <= rsi_buy  e close <= banda inferior (BB len/k)
       - SELL: RSI >= rsi_sell e close >= banda superior
     Saídas (SL/TP/parcial/trailing) são geridas pelo Executor/RiskManager.
@@ -22,11 +22,11 @@ class ScalperRSIBB:
     def __init__(
         self,
         rsi_len: int = 14,
-        rsi_buy: int = 30,
-        rsi_sell: int = 70,
+        rsi_buy: int = 22,
+        rsi_sell: int = 78,
         bb_len: int = 20,
         bb_k: float = 2.0,
-        max_adx_h1: int = 18,
+        max_adx_h1: int = 14,
         min_bars: int = 120,
         ml_model=None,
         **__,

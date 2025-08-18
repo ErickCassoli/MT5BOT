@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import math
+from types import SimpleNamespace
 
 from core.types import Side
 from core.utils import atr, donchian, adx, ema
@@ -55,6 +56,22 @@ class Executor:
         self.baseline = None
         self.last_signal_ts = {s: None for s in cfg.symbols}
         self.verbose = bool(getattr(cfg, "log_every_bar", True))
+
+        # ---- Gate de confiança sem ML (parametrizável via YAML) ----
+        # Se não houver ml_model, vamos usar estes parâmetros para montar o threshold dinâmico.
+        gate = getattr(cfg, "gate", None)
+        self.gate = SimpleNamespace(
+            min_conf_base = 0.62 if gate is None or getattr(gate, "min_conf_base", None) is None else float(gate.min_conf_base),
+            thr_min       = 0.55 if gate is None or getattr(gate, "thr_min", None) is None else float(gate.thr_min),
+            thr_max       = 0.75 if gate is None or getattr(gate, "thr_max", None) is None else float(gate.thr_max),
+            # penalização por spread relativo alto (ex.: > 0.60 soma +0.03 no thr)
+            spread_rel_k  = 0.60 if gate is None or getattr(gate, "spread_rel_k", None) is None else float(gate.spread_rel_k),
+            spread_rel_add= 0.03 if gate is None or getattr(gate, "spread_rel_add", None) is None else float(gate.spread_rel_add),
+            # relaxo quando ADX muito forte (ex.: >= 25 subtrai 0.02)
+            adx_relax_min = 25.0 if gate is None or getattr(gate, "adx_relax_min", None) is None else float(gate.adx_relax_min),
+            adx_relax_add = -0.02 if gate is None or getattr(gate, "adx_relax_add", None) is None else float(gate.adx_relax_add),
+        )
+
         self._summary_done = False
         self.json_summary = JSONSummary()
         self._ml_thr_logged = False  # logar a origem do threshold apenas 1x
@@ -121,8 +138,10 @@ class Executor:
         abs_ok = spread_pts <= hard_cap
 
         grace_ok = False
-        if not dyn_ok and abs_ok:
-            grace_ok = spread_grace(df_e, df_r, atr_now, spread_price, self.cfg.strategy.params)
+        # Desativado por padrão: não usar 'graça' de spread.
+        # (Se quiser reativar, crie flag no YAML: spread.allow_grace = true e proteja com getattr)
+        # if not dyn_ok and abs_ok and getattr(self.cfg.spread, "allow_grace", False):
+        #     grace_ok = spread_grace(df_e, df_r, atr_now, spread_price, self.cfg.strategy.params)
 
         if self.verbose:
             log.debug(
@@ -148,57 +167,33 @@ class Executor:
 
         sig = self.strategy.generate_signal(symbol, df_e, df_r)
 
-        # --- ML threshold base: config.min_prob > model.threshold > default ---
-        thr_cfg = None
-        try:
-            ml_cfg = getattr(self.cfg, "ml_model", None)
-            if ml_cfg:
-                # quando for dict (caso comum do YAML)
-                if isinstance(ml_cfg, dict):
-                    params = ml_cfg.get("params") or {}
-                    if "min_prob" in params and params["min_prob"] is not None:
-                        thr_cfg = float(params["min_prob"])
-                else:
-                    # compat: objeto com .params
-                    params = getattr(ml_cfg, "params", None)
-                    if params and getattr(params, "min_prob", None) is not None:
-                        thr_cfg = float(getattr(params, "min_prob"))
-        except Exception:
-            thr_cfg = None
+        # --- ML threshold dinâmico OU gate heurístico sem ML ---
+        if self.ml_model is not None:
+            thr = float(getattr(self.ml_model, "threshold", 0.50))
+        else:
+            thr = float(self.gate.min_conf_base)
 
-        thr_model = float(getattr(self.ml_model, "threshold", 0.5)) if self.ml_model is not None else 0.5
-        thr_base = (
-            float(thr_cfg)
-            if (thr_cfg is not None)
-            else (thr_model if self.ml_model is not None else 0.60)  # sem ML: default mais conservador
-        )
-
-        # Loga a fonte do threshold apenas 1x por sessão
-        if self.ml_model is not None and not self._ml_thr_logged:
-            src = "config.min_prob" if (thr_cfg is not None) else "model.threshold"
-            log.info(f"[ML] gate threshold em uso = {thr_base:.3f} (fonte={src})")
-            self._ml_thr_logged = True
-
-        # --- Ajustes condicionais (spread/ADX) em cima do thr_base ---
-        thr = float(thr_base)
-        reasons = []
-
-        # Spread relativo ao ATR (mais caro => endurece)
+        # Ajustes condicionais (spread/ADX)
         spr_rel = (self.broker.get_spread_points(symbol) * self.broker.get_point(symbol)) / max(atr_now, 1e-9)
-        if spr_rel > 0.60:
-            thr += 0.03
-            reasons.append("spread_rel>0.60")
+        reasons = []
+        if spr_rel > self.gate.spread_rel_k:
+            thr += self.gate.spread_rel_add
+            reasons.append(f"spread_rel>{self.gate.spread_rel_k:.2f}")
 
-        # ADX(H1) muito forte => relaxa um pouco
         adx_h1 = None
         if sig and getattr(sig, "meta", None):
             adx_h1 = sig.meta.get("adx_h1")
-            if adx_h1 and adx_h1 >= 25:
-                thr -= 0.02
-                reasons.append("adx_h1>=25")
+            if adx_h1 and adx_h1 >= self.gate.adx_relax_min:
+                thr += self.gate.adx_relax_add  # normalmente -0.02
+                reasons.append(f"adx_h1>={self.gate.adx_relax_min:.0f}")
 
-        # clamp defensivo
-        thr = max(0.40, min(0.75, thr))
+        # clamp
+        thr = max(self.gate.thr_min, min(self.gate.thr_max, thr))
+
+        # Loga a fonte do threshold apenas 1x por sessão (quando houver ML)
+        if self.ml_model is not None and not self._ml_thr_logged:
+            log.info(f"[ML] gate threshold em uso = {thr:.3f} (fonte=model.threshold)")
+            self._ml_thr_logged = True
 
         if sig is None:
             if self.verbose:
@@ -208,7 +203,7 @@ class Executor:
         if sig.confidence < thr:
             if self.verbose:
                 rtxt = f" ({', '.join(reasons)})" if reasons else ""
-                log.info(f"[{symbol}] skip: ML gate p={sig.confidence:.3f} < thr={thr:.3f}{rtxt}")
+                log.info(f"[{symbol}] skip: gate p={sig.confidence:.3f} < thr={thr:.3f}{rtxt}")
             return None
 
         open_mine = [p for p in self.broker.positions(symbol) if p.magic == self.cfg.magic]

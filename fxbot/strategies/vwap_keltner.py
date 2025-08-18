@@ -29,7 +29,7 @@ class VWAPKeltner:
         k_ema_len: int = 20,
         k_atr_len: int = 10,
         k_mult: float = 1.8,
-        adx_thr: int = 14,
+        adx_thr: int = 18,
         rsi_len: int = 14,
         rsi_trig: int = 50,
         near_vwap_by_atr: float = 0.35,
@@ -37,8 +37,8 @@ class VWAPKeltner:
         allow_break_close: bool = True,
         min_bars: int = 150,
         donchian: int = 16,          # compat/logs
-        min_break_atr: float = 0.10, # margem mínima no breakout (em ATR)
-        min_room_atr: float = 1.20,  # espaço mínimo até a banda alvo (em ATR) p/ pullback
+        min_break_atr: float = 0.12, # margem mínima no breakout (em ATR)
+        min_room_atr: float = 1.30,  # espaço mínimo até a banda alvo (em ATR) p/ pullback
         ml_model=None,
         **__,
     ):
