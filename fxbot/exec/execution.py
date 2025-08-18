@@ -354,9 +354,15 @@ class Executor:
                     log.info(f"[{p.symbol}] sltp_update ticket={p.ticket} sl={new_sl} tp={p.tp} at≥{trail_start_r:.2f}R")
 
     # -------- resumo ----------
-    def maybe_summary_once(self):
+    def maybe_summary_once(self, force: bool = False):
+        """Gera o resumo da sessão uma única vez.
+
+        Args:
+            force: se True, gera o resumo mesmo antes de atingir o horário
+                de término configurado.
+        """
         now = datetime.now(timezone.utc)
-        if self._summary_done or now < self.session_end:
+        if self._summary_done or (not force and now < self.session_end):
             return
         try:
             df = self.broker.history_deals_df(self.session_start, now)
