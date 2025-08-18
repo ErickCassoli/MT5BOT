@@ -98,6 +98,11 @@ def main() -> None:
     except KeyboardInterrupt:
         log.info("Interrompido pelo usuário (Ctrl+C). Encerrando...")
         try:
+            # Gera resumo antes de encerrar
+            ex.maybe_summary_once(force=True)
+        except Exception:
+            log.exception("Erro ao gerar resumo final")
+        try:
             shutdown = getattr(broker, "shutdown", None)
             if callable(shutdown):
                 shutdown()
