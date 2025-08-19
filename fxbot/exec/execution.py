@@ -7,6 +7,7 @@ from core.utils import atr, donchian, adx, ema
 from adapters.broker import Broker
 from logs.json_summary import JSONSummary
 from core.logging import get_logger
+import pandas as pd
 
 
 def spread_grace(df_exec, df_regime, atr_now, spread_price, params) -> bool:
@@ -300,53 +301,143 @@ class Executor:
 
     # -------- gestão das posições ----------
     def manage_open_positions(self):
-        # Novos parâmetros por R
-        partial_r = float(getattr(self.cfg.risk, "partial_r", 1.0))
-        trail_start_r = float(getattr(self.cfg.risk, "trail_start_r", 1.2))
+        """
+        Gestão mais agressiva de proteção de lucro:
+        - BE cedo (0.8R) com offset de +0.05R
+        - trailing progressivo por estágios (ATR * mult variável conforme R)
+        - 2 parciais (0.8R e 1.6R)
+        - time-stop (fecha se não anda em N barras)
+        - saída de estolamento (3 candles contra + retorno à EMA20/VWAP)
+        """
+        # ---- parâmetros (com defaults seguros) ----
+        partial_r_1       = float(getattr(self.cfg.risk, "partial_r_1", 0.8))
+        partial_frac_1    = float(getattr(self.cfg.risk, "partial_frac_1", 0.50))
+        partial_r_2       = float(getattr(self.cfg.risk, "partial_r_2", 1.6))
+        partial_frac_2    = float(getattr(self.cfg.risk, "partial_frac_2", 0.50))
+
+        be_trigger_r      = float(getattr(self.cfg.risk, "be_trigger_r", 0.8))
+        be_offset_r       = float(getattr(self.cfg.risk, "be_offset_r", 0.05))  # SL vai para entrada + 0.05R
+
+        trail_start_r     = float(getattr(self.cfg.risk, "trail_start_r", 1.0))
+        trail_step_r_1    = float(getattr(self.cfg.risk, "trail_step_r_1", 1.5))
+        trail_step_r_2    = float(getattr(self.cfg.risk, "trail_step_r_2", 2.2))
+        atr_mult_stage_1  = float(getattr(self.cfg.risk, "atr_trail_mult_stage1", 1.0))
+        atr_mult_stage_2  = float(getattr(self.cfg.risk, "atr_trail_mult_stage2", 0.8))
+        atr_mult_stage_3  = float(getattr(self.cfg.risk, "atr_trail_mult_stage3", 0.6))
+
+        max_bars_in_trade = int(getattr(self.cfg.risk, "max_bars_in_trade", 24))  # ~2h em M5
+        stall_check       = bool(getattr(self.cfg.risk, "stall_exit_enabled", True))
+        stall_lookback    = int(getattr(self.cfg.risk, "stall_lookback", 3))      # 3 candles contra
+        stall_near_ema_k  = float(getattr(self.cfg.risk, "stall_near_ema_k", 0.35))  # “próximo da EMA20” = 0.35*ATR
 
         for p in self.broker.positions():
             if p.magic != self.cfg.magic:
                 continue
 
-            df = self.broker.get_rates(p.symbol, self.cfg.timeframe_exec, 200)
+            # --- séries e ATR/EMA/VWAP atuais ---
+            df = self.broker.get_rates(p.symbol, self.cfg.timeframe_exec, 240)
             a = float(atr(df["h"], df["l"], df["c"], 14).iloc[-1])
+            pt = self.broker.get_point(p.symbol)
 
-            # R por posição
+            # R por posição (mesma lógica do build de ordem)
             r_val = abs(p.price_open - p.sl) if getattr(p, "sl", 0) > 0 else self.cfg.risk.atr_mult_sl * a
 
             t = self.broker.symbol_info_tick(p.symbol)
             is_buy = (p.side == Side.BUY)
             price_now = t.bid if is_buy else t.ask
             profit = (price_now - p.price_open) if is_buy else (p.price_open - price_now)
+            profit_r = profit / max(r_val, 1e-9)
 
-            # ---- Parcial em partial_r * R (respeitando volume_min/step) ----
+            # ---- TIME-STOP: se não andou, sai parcial/total ----
+            try:
+                # tenta usar timestamp da posição (depende do adapter)
+                opened_at = getattr(p, "time", None) or getattr(p, "time_open", None)
+                bars_since = None
+                if opened_at is not None and "ts" in df.columns:
+                    bars_since = int((df["ts"] > pd.to_datetime(opened_at)).sum())
+            except Exception:
+                bars_since = None
+
+            if bars_since is not None and bars_since >= max_bars_in_trade and profit_r < 0.5:
+                # sem andar ≈ lateralizando/voltando: realiza metade e puxa SL pra BE
+                vol_min = float(getattr(self.broker.symbol_info(p.symbol), "volume_min", 0.01) or 0.01)
+                step    = float(getattr(self.broker.symbol_info(p.symbol), "volume_step", 0.01) or 0.01)
+                dec = _decimals_from_step(step)
+                vol_q = max(vol_min, round(max(step, p.volume * 0.5) // step * step, dec))
+                if vol_q < p.volume:
+                    self.broker.close_position(p.ticket, vol_q)
+                    log.info(f"[{p.symbol}] time_stop: partial_close {vol_q} após {bars_since} barras (<0.5R)")
+                # move SL para BE (sem offset)
+                new_sl = p.price_open
+                if (is_buy and (p.sl is None or new_sl > p.sl + pt*2)) or (not is_buy and (p.sl is None or new_sl < p.sl - pt*2)):
+                    self.broker.modify_sltp(p.ticket, new_sl, p.tp)
+                    log.info(f"[{p.symbol}] time_stop: SL->BE {new_sl}")
+                continue
+
+            # ---- Parciais em 0.8R e 1.6R ----
             info = self.broker.symbol_info(p.symbol)
             step = float(getattr(info, "volume_step", 0.01) or 0.01)
             vol_min = float(getattr(info, "volume_min", 0.01) or 0.01)
             dec = _decimals_from_step(step)
 
-            if profit >= partial_r * r_val and p.volume > vol_min:
-                vol_target = p.volume * float(self.cfg.risk.partial_at_1r)  # fração da parcial definida no YAML
-                vol_q = math.floor(vol_target / step) * step
-                vol_q = max(vol_min, min(vol_q, p.volume))  # não ultrapassar o volume da posição
-                vol_q = round(vol_q, dec)
-
+            def _do_partial(frac: float, tag: str):
+                vol_q = round(max(vol_min, (p.volume * frac) // step * step), dec)
                 if vol_q >= vol_min and vol_q <= p.volume - step + 1e-12:
                     self.broker.close_position(p.ticket, vol_q)
-                    log.info(f"[{p.symbol}] partial_close ticket={p.ticket} volume={vol_q} at≥{partial_r:.2f}R")
+                    log.info(f"[{p.symbol}] partial_close {tag} ticket={p.ticket} volume={vol_q}")
 
-            # ---- Trailing + Break-even (apenas após trail_start_r * R) ----
+            if profit_r >= partial_r_1 and p.volume > vol_min * 1.5:
+                _do_partial(partial_frac_1, "p1@0.8R")
+
+            if profit_r >= partial_r_2 and p.volume > vol_min * 1.5:
+                _do_partial(partial_frac_2, "p2@1.6R")
+
+            # ---- BE cedo (0.8R) com offset 0.05R ----
+            # Ex.: se SL estava 1.6*ATR e trade andou 0.8R, protege entrada + 0.05R
             new_sl = p.sl
-            if profit >= trail_start_r * r_val:
-                be = p.price_open
-                trail = float(self.cfg.risk.atr_trail_mult) * a
-                new_sl = max(be, price_now - trail) if is_buy else min(be, price_now + trail)
+            if profit_r >= be_trigger_r:
+                be_price = (p.price_open + be_offset_r * r_val) if is_buy else (p.price_open - be_offset_r * r_val)
+                if is_buy:
+                    new_sl = be_price if (new_sl is None or be_price > new_sl) else new_sl
+                else:
+                    new_sl = be_price if (new_sl is None or be_price < new_sl) else new_sl
 
-                # atualiza SL apenas se mover pelo menos 2 pontos
-                pt = self.broker.get_point(p.symbol)
-                if abs((new_sl or 0) - (p.sl or 0)) > pt * 2:
-                    self.broker.modify_sltp(p.ticket, new_sl, p.tp)
-                    log.info(f"[{p.symbol}] sltp_update ticket={p.ticket} sl={new_sl} tp={p.tp} at≥{trail_start_r:.2f}R")
+            # ---- Trailing progressivo por estágios (ATR) ----
+            if profit_r >= trail_start_r:
+                atr_mult = atr_mult_stage_1
+                if profit_r >= trail_step_r_1:
+                    atr_mult = min(atr_mult, atr_mult_stage_2)
+                if profit_r >= trail_step_r_2:
+                    atr_mult = min(atr_mult, atr_mult_stage_3)
+
+                trail = atr_mult * a
+                cand = (price_now - trail) if is_buy else (price_now + trail)
+                if is_buy:
+                    new_sl = max(new_sl or -1e9, cand)
+                else:
+                    new_sl = min(new_sl or 1e9, cand)
+
+            # ---- Saída de estolamento (3 candles contra + volta para EMA20) ----
+            if stall_check and len(df) >= 30:
+                import numpy as np
+                c = df["c"].astype(float)
+                ema20 = ema(c, 20).iloc[-1]
+                last = c.iloc[-stall_lookback:]
+                contra = (last.diff().dropna() < 0).sum() if is_buy else (last.diff().dropna() > 0).sum()
+                near_ema = abs(float(c.iloc[-1]) - float(ema20)) <= stall_near_ema_k * a
+                if contra >= stall_lookback - 1 and near_ema:
+                    # encurta o SL para a EMA20 ± 0.1*ATR
+                    tgt = float(ema20) - 0.1 * a if is_buy else float(ema20) + 0.1 * a
+                    if is_buy:
+                        new_sl = max(new_sl or -1e9, tgt)
+                    else:
+                        new_sl = min(new_sl or 1e9, tgt)
+                    log.info(f"[{p.symbol}] stall_exit: tighten SL near EMA20 (contra={contra}, near_ema={near_ema})")
+
+            # ---- aplica SL se mudou (evita micro-updates) ----
+            if new_sl is not None and (p.sl is None or abs(new_sl - p.sl) > pt * 2):
+                self.broker.modify_sltp(p.ticket, new_sl, p.tp)
+                log.info(f"[{p.symbol}] sltp_update ticket={p.ticket} sl={new_sl} tp={p.tp}")
 
     # -------- resumo ----------
     def maybe_summary_once(self, force: bool = False):
