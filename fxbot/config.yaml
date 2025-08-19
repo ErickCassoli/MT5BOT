@@ -1,0 +1,136 @@
+# ===================== FXBOT CONFIG — 24/7 (APENAS ESTRATÉGIAS, ASSERTIVO++) =====================
+
+symbols: ["USDJPY", "EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "EURJPY"]
+
+timeframe_exec: "M5"
+timeframe_regime: "H1"
+cooldown_minutes: 10           # 8 -> 10 para reduzir re-entradas em sequência
+magic: 5120812
+log_level: "INFO"
+log_every_bar: false
+
+strategy:
+  class_path: "strategies.ensemble_router.EnsembleRouter"
+  params:
+    mode: "best_conf"
+    children:
+      - class_path: "strategies.price_action.PriceActionConfluence"
+        params:
+          adx_thr_trend: 20
+          ema_len: 20
+          sr_win: 24
+          min_break_atr: 0.14
+          near_sr_by_atr: 0.18
+          near_vwap_by_atr: 0.30
+          min_room_atr: 1.20
+          min_bars: 200
+          allow_retest: true
+      - class_path: "strategies.vwap_keltner.VWAPKeltner"
+        params:
+          k_ema_len: 20
+          k_atr_len: 10
+          k_mult: 1.8
+          adx_thr: 18
+          rsi_len: 14
+          rsi_trig: 50
+          near_vwap_by_atr: 0.30    # 0.35 -> 0.30 (pullback tem que encostar mais no VWAP)
+          confirm_ema20: true
+          allow_break_close: true
+          min_break_atr: 0.12
+          min_room_atr: 1.40         # 1.30 -> 1.40 (precisa ter mais “pista” até a banda)
+          min_bars: 150
+          donchian: 16
+
+      - class_path: "strategies.donchian_adx.DonchianADX"
+        params:
+          donchian: 16
+          adx_thr: 18
+          ema_fast: 20
+          ema_mid: 50
+          ema_slow: 200
+          allow_close_break: true
+          min_break_atr: 0.13        # 0.12 -> 0.13 (evita rompimento “raso”)
+          min_bars: 150
+
+      - class_path: "strategies.breakout_volume.BreakoutVolume"
+        params:
+          sr_win: 24
+          vol_lookback: 20
+          vol_mult: 1.9               # 1.8 -> 1.9 (exige volume mais anormal)
+          adx_thr: 18                 # 16 -> 18 (mais regime)
+          allow_retest: true
+          min_bars: 200
+          min_break_atr: 0.14         # 0.12 -> 0.14 (margem maior além do SR)
+          retest_vol_relax: 0.88      # 0.90 -> 0.88 (ainda restrito, um toque mais permissivo)
+
+      - class_path: "strategies.scalper_rsi_bb.ScalperRSIBB"
+        params:
+          rsi_len: 14
+          rsi_buy: 22
+          rsi_sell: 78
+          bb_len: 20
+          bb_k: 2.0
+          max_adx_h1: 14              # só em mercado bem lateral
+          min_bars: 120
+
+broker:
+  class_path: "adapters.mt5.MT5Broker"
+  params:
+    deviation: 30
+
+session:
+  hours: 24
+  start_hour: 0
+  end_hour: 24
+  profit_target_pct: 3.0
+  loss_limit_pct: 4.0
+  continue_after_target: true
+  max_concurrent_trades: 2
+  allow_pyramiding: false
+  max_stack_per_symbol: 1
+  min_stack_increase_r: 0.6
+  pyramiding_risk_scale: 0.5
+
+risk:
+risk:
+  risk_per_trade_pct: 0.35
+  risk_per_trade_pct_after_target: 0.20
+  atr_mult_sl: 1.6
+  atr_mult_tp: 2.8            # ↓ alvo um pouco mais perto para realizar mais
+  # --- NOVOS (batem com o patch acima) ---
+  partial_r_1: 0.8
+  partial_frac_1: 0.50
+  partial_r_2: 1.6
+  partial_frac_2: 0.50
+  be_trigger_r: 0.8
+  be_offset_r: 0.05
+  trail_start_r: 1.0
+  trail_step_r_1: 1.5
+  trail_step_r_2: 2.2
+  atr_trail_mult_stage1: 1.0
+  atr_trail_mult_stage2: 0.8
+  atr_trail_mult_stage3: 0.6
+  max_bars_in_trade: 24
+  stall_exit_enabled: true
+  stall_lookback: 3
+  stall_near_ema_k: 0.35
+
+spread:
+  hard_cap_points: 30
+  max_atr_ratio: 0.55              # 0.60 -> 0.55 (corta entradas com spread relativo alto)
+
+gate:                                # heurístico do Executor (sem ML)
+  min_conf_base: 0.66               # 0.62 -> 0.66 (barra base mais alta)
+  thr_min: 0.60
+  thr_max: 0.78
+  spread_rel_k: 0.50                # 0.60 -> 0.55 (começa a punir mais cedo)
+  spread_rel_add: 0.05              # 0.03 -> 0.04
+  adx_relax_min: 30                 # 25 -> 35 (só relaxa com ADX realmente forte)
+  adx_relax_add: -0.01              # relaxa pouquinho
+
+
+# ml_model:
+#   class_path: "ml.models.SeuModelo"
+#   params:
+#     threshold: 0.5
+#     ...

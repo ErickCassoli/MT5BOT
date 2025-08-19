@@ -27,7 +27,7 @@ class DonchianADX:
         ema_slow: int = 200,
         allow_close_break: bool = True,
         min_bars: int = 150,
-        min_break_atr: float = 0.10,  # margem mínima além da borda (em ATR)
+        min_break_atr: float = 0.12,  # margem mínima além da borda (em ATR)
         ml_model=None,
         **__,
     ):

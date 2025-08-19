@@ -10,6 +10,7 @@ fxbot/config.yaml
 
 fxbot/datasets/
 fxbot/models/
+session_*.json
 
 # Distribution / packaging
 .Python
