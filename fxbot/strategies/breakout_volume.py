@@ -20,8 +20,8 @@ class BreakoutVolume:
         no reteste o volume pode ser levemente relaxado (retest_vol_relax).
 
     Parâmetros típicos:
-      sr_win=24~32, vol_lookback=20, vol_mult=1.6~2.0, adx_thr=12~18,
-      min_break_atr=0.10, retest_vol_relax=0.90, min_bars>=200
+      sr_win=24~32, vol_lookback=20, vol_mult=1.8, adx_thr=16,
+      min_break_atr=0.12, retest_vol_relax=0.90, min_bars>=200
 
     Saídas (SL/TP/partial/trailing) são geridas no Executor/RiskManager.
     """
@@ -30,11 +30,11 @@ class BreakoutVolume:
         self,
         sr_win: int = 24,
         vol_lookback: int = 20,
-        vol_mult: float = 1.6,
-        adx_thr: int = 12,
+        vol_mult: float = 1.8,
+        adx_thr: int = 16,
         allow_retest: bool = True,
         min_bars: int = 200,
-        min_break_atr: float = 0.10,
+        min_break_atr: float = 0.12,
         retest_vol_relax: float = 0.90,
         ml_model=None,
         **__,
